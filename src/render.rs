@@ -1,0 +1,647 @@
+//! Batched rendering. Instead of one entity per item/belt, the whole world
+//! is drawn with two meshes:
+//!   - a static mesh for belts + buildings, rebuilt only on edits
+//!   - a dynamic mesh for items + chevrons, rebuilt each frame from the SoA
+//!     arrays with camera-rect culling
+//! This collapses tens of thousands of entities into 2 draw calls.
+
+use bevy::core_pipeline::bloom::BloomSettings;
+use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
+use bevy::input::mouse::MouseWheel;
+use bevy::prelude::*;
+use bevy::render::mesh::{Indices, PrimitiveTopology};
+use bevy::render::render_asset::RenderAssetUsages;
+use bevy::render::view::NoFrustumCulling;
+use bevy::sprite::{MaterialMesh2dBundle, Mesh2dHandle};
+
+use crate::belts::{BeltSim, BuildingKind, Dir, INVALID};
+use crate::sim::{INSERTER_COOLDOWN, is_consumer, is_power_node, POWER_RADIUS2};
+use crate::ui::{Blueprint, EditorState, Selection};
+use crate::{GameWorld, Sim};
+
+pub const TILE: f32 = 48.0;
+const LANE_OFFSET: f32 = 0.22;
+
+pub const ITEM_COLORS: [Color; 5] = [
+    Color::srgb(0.99, 0.76, 0.18), // amber
+    Color::srgb(0.35, 0.78, 0.98), // sky
+    Color::srgb(0.55, 0.92, 0.45), // lime
+    Color::srgb(0.96, 0.45, 0.55), // rose
+    Color::srgb(0.75, 0.55, 0.98), // violet
+];
+
+pub fn dir_angle(dir: Dir) -> f32 {
+    match dir {
+        Dir::East => 0.0,
+        Dir::North => std::f32::consts::FRAC_PI_2,
+        Dir::West => std::f32::consts::PI,
+        Dir::South => -std::f32::consts::FRAC_PI_2,
+    }
+}
+
+fn item_pos(sim: &BeltSim, belt: u32, lane: usize, dist: f32) -> Vec2 {
+    let b = belt as usize;
+    let center = Vec2::new(sim.belt_x[b] as f32 * TILE, sim.belt_y[b] as f32 * TILE);
+    let (dx, dy) = sim.belt_dir[b].fvec();
+    let (px, py) = sim.belt_dir[b].perp();
+    let along = Vec2::new(dx, dy) * (dist - 0.5) * TILE;
+    let side = Vec2::new(px, py) * if lane == 0 { LANE_OFFSET } else { -LANE_OFFSET } * TILE;
+    center + along + side
+}
+
+// ------------------------------------------------------------- mesh builder
+
+#[derive(Default)]
+struct MeshBatch {
+    positions: Vec<[f32; 3]>,
+    colors: Vec<[f32; 4]>,
+    indices: Vec<u32>,
+}
+
+impl MeshBatch {
+    /// Push a rotated quad centered at `c` with half-extents `hw`/`hh`.
+    fn quad(&mut self, c: Vec2, hw: f32, hh: f32, angle: f32, color: [f32; 4]) {
+        let (s, co) = angle.sin_cos();
+        let ex = Vec2::new(co, s);
+        let ey = Vec2::new(-s, co);
+        let base = self.positions.len() as u32;
+        for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+            let p = c + ex * (hw * sx) + ey * (hh * sy);
+            self.positions.push([p.x, p.y, 0.0]);
+            self.colors.push(color);
+        }
+        self.indices
+            .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+
+    /// Push a regular `sides`-gon polygon centered at `c` with radius `r`.
+    fn ngon(&mut self, c: Vec2, r: f32, sides: u32, angle: f32, color: [f32; 4]) {
+        let sides = sides.max(3);
+        let base = self.positions.len() as u32;
+        let step = std::f32::consts::TAU / sides as f32;
+        for s in 0..sides {
+            let a = angle + s as f32 * step;
+            let p = c + Vec2::new(a.cos(), a.sin()) * r;
+            self.positions.push([p.x, p.y, 0.0]);
+            self.colors.push(color);
+        }
+        for s in 0..sides {
+            let i = base + s;
+            let j = base + (s + 1) % sides;
+            self.positions.push([c.x, c.y, 0.0]);
+            self.colors.push(color);
+            self.indices.extend_from_slice(&[i, j, base + sides + s]);
+        }
+    }
+
+    /// Thin line from `a` to `b` with the given thickness and color.
+    fn line(&mut self, a: Vec2, b: Vec2, thickness: f32, color: [f32; 4]) {
+        let mid = (a + b) * 0.5;
+        let d = b - a;
+        let len = d.length() * 0.5;
+        let angle = d.y.atan2(d.x);
+        self.quad(mid, len, thickness * 0.5, angle, color);
+    }
+
+    fn write_to(self, mesh: &mut Mesh) {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, self.positions);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, self.colors);
+        mesh.insert_indices(Indices::U32(self.indices));
+    }
+}
+
+fn lin(c: Color) -> [f32; 4] {
+    c.to_linear().to_f32_array()
+}
+
+/// HDR-boosted color so bloom picks it up.
+fn glow(c: Color, boost: f32) -> [f32; 4] {
+    let mut v = c.to_linear().to_f32_array();
+    v[0] *= boost;
+    v[1] *= boost;
+    v[2] *= boost;
+    v
+}
+
+fn lin_a(c: Color, a: f32) -> [f32; 4] {
+    let mut v = c.to_linear().to_f32_array();
+    v[3] = a;
+    v
+}
+
+fn empty_mesh() -> Mesh {
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
+    MeshBatch::default().write_to(&mut mesh);
+    mesh
+}
+
+// ---------------------------------------------------------------- resources
+
+#[derive(Resource)]
+pub struct WorldMeshes {
+    pub static_mesh: Handle<Mesh>,
+    pub dynamic_mesh: Handle<Mesh>,
+}
+
+/// Set to true whenever belts/buildings change so the static mesh rebuilds.
+#[derive(Resource)]
+pub struct WorldDirty(pub bool);
+
+#[derive(Resource)]
+pub struct CameraTarget {
+    pub pos: Vec2,
+    pub zoom: f32,
+}
+
+#[derive(Component)]
+pub struct Hud;
+
+// -------------------------------------------------------------------- setup
+
+pub fn setup_scene(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    sim: Res<Sim>,
+) {
+    // Bloom is opt-in (B key): it costs ~10 FPS on integrated GPUs.
+    commands.spawn(Camera2dBundle {
+        camera: Camera {
+            hdr: true,
+            ..default()
+        },
+        ..default()
+    });
+    commands.insert_resource(CameraTarget {
+        pos: Vec2::new(
+            sim.0.belt_x.iter().sum::<i32>() as f32 / sim.0.belt_count() as f32 * TILE,
+            sim.0.belt_y.iter().sum::<i32>() as f32 / sim.0.belt_count() as f32 * TILE,
+        ),
+        zoom: 8.0,
+    });
+
+    let static_mesh = meshes.add(empty_mesh());
+    let dynamic_mesh = meshes.add(empty_mesh());
+    let material = materials.add(ColorMaterial::default());
+
+    commands.spawn((
+        MaterialMesh2dBundle {
+            mesh: Mesh2dHandle(static_mesh.clone()),
+            material: material.clone(),
+            transform: Transform::from_xyz(0.0, 0.0, 0.0),
+            ..default()
+        },
+        NoFrustumCulling,
+    ));
+    commands.spawn((
+        MaterialMesh2dBundle {
+            mesh: Mesh2dHandle(dynamic_mesh.clone()),
+            material,
+            transform: Transform::from_xyz(0.0, 0.0, 1.0),
+            ..default()
+        },
+        NoFrustumCulling,
+    ));
+
+    commands.insert_resource(WorldMeshes {
+        static_mesh,
+        dynamic_mesh,
+    });
+    commands.insert_resource(WorldDirty(true));
+
+    commands.spawn((
+        TextBundle::from_section(
+            "",
+            TextStyle {
+                font_size: 18.0,
+                color: Color::srgb(0.8, 0.85, 0.92),
+                ..default()
+            },
+        )
+        .with_style(Style {
+            position_type: PositionType::Absolute,
+            left: Val::Px(12.0),
+            top: Val::Px(10.0),
+            ..default()
+        }),
+        Hud,
+    ));
+}
+
+// ------------------------------------------------------------------ systems
+
+/// Rebuild the static world mesh (belts + buildings) when edited.
+pub fn rebuild_static_mesh(
+    mut dirty: ResMut<WorldDirty>,
+    handles: Res<WorldMeshes>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    sim: Res<Sim>,
+    world: Res<GameWorld>,
+) {
+    if !dirty.0 {
+        return;
+    }
+    dirty.0 = false;
+
+    let mut batch = MeshBatch::default();
+    let plate = lin(Color::srgb(0.13, 0.15, 0.19));
+    let track = lin(Color::srgb(0.19, 0.22, 0.28));
+
+    // Ore patches.
+    for y in 0..world.0.height {
+        for x in 0..world.0.width {
+            let ore = world.0.ore_at(x, y);
+            if ore == 0 {
+                continue;
+            }
+            let c = Vec2::new((x as f32 - 0.5) * TILE, (y as f32 - 0.5) * TILE);
+            let ore_color = match ore {
+                1 => lin(Color::srgb(0.42, 0.22, 0.10)), // amber
+                2 => lin(Color::srgb(0.09, 0.28, 0.42)), // sky
+                3 => lin(Color::srgb(0.10, 0.36, 0.12)), // lime
+                _ => lin(Color::srgb(0.35, 0.25, 0.18)),
+            };
+            batch.quad(c, TILE * 0.43, TILE * 0.43, 0.0, ore_color);
+        }
+    }
+
+    // Subtle tile-grid backdrop.
+    let gline = [1.0, 1.0, 1.0, 0.025];
+    let (w, h) = (world.0.width as f32, world.0.height as f32);
+    let (cx, cy) = ((w - 1.0) * 0.5 * TILE, (h - 1.0) * 0.5 * TILE);
+    for gx in 0..world.0.width + 1 {
+        let x = (gx as f32 - 0.5) * TILE;
+        batch.quad(Vec2::new(x, cy), 0.5, h * TILE * 0.5, 0.0, gline);
+    }
+    for gy in 0..world.0.height + 1 {
+        let y = (gy as f32 - 0.5) * TILE;
+        batch.quad(Vec2::new(cx, y), w * TILE * 0.5, 0.5, 0.0, gline);
+    }
+
+    for b in 0..sim.0.belt_count() {
+        if !sim.0.belt_active[b] {
+            continue;
+        }
+        let c = Vec2::new(sim.0.belt_x[b] as f32 * TILE, sim.0.belt_y[b] as f32 * TILE);
+        let angle = dir_angle(sim.0.belt_dir[b]);
+        batch.quad(c, TILE * 0.48, TILE * 0.48, 0.0, plate);
+        batch.quad(c, TILE * 0.46, TILE * 0.39, angle, track);
+    }
+
+    let outline = lin(Color::srgb(0.04, 0.05, 0.06));
+    for i in 0..sim.0.bld_x.len() {
+        if !sim.0.bld_active[i] {
+            continue;
+        }
+        let c = Vec2::new(sim.0.bld_x[i] as f32 * TILE, sim.0.bld_y[i] as f32 * TILE);
+        let angle = dir_angle(sim.0.bld_dir[i]);
+        let half = if sim.0.bld_kind[i] == BuildingKind::Inserter {
+            TILE * 0.32
+        } else {
+            TILE * 0.45
+        };
+        // Dark outline makes buildings pop off the belts/ore.
+        batch.quad(c, half + TILE * 0.03, half + TILE * 0.03, 0.0, outline);
+        let body = match sim.0.bld_kind[i] {
+            BuildingKind::Source => lin(Color::srgb(0.16, 0.45, 0.42)),
+            BuildingKind::Sink => lin(Color::srgb(0.5, 0.3, 0.14)),
+            BuildingKind::Assembler => lin(Color::srgb(0.32, 0.26, 0.45)),
+            BuildingKind::Inserter => lin(Color::srgb(0.55, 0.42, 0.12)),
+            BuildingKind::Miner => lin(Color::srgb(0.38, 0.18, 0.42)),
+            BuildingKind::Storage => lin(Color::srgb(0.22, 0.32, 0.40)),
+            BuildingKind::Shipment => lin(Color::srgb(0.20, 0.55, 0.40)),
+            BuildingKind::Splitter => lin(Color::srgb(0.55, 0.50, 0.18)),
+            BuildingKind::Pole => lin(Color::srgb(0.55, 0.55, 0.60)),
+            BuildingKind::Generator => lin(Color::srgb(0.90, 0.80, 0.25)),
+        };
+        batch.quad(c, half, half, 0.0, body);
+        // Direction notch on the output/input edge.
+        let (dx, dy) = sim.0.bld_dir[i].fvec();
+        let notch = c + Vec2::new(dx, dy) * TILE * 0.32;
+        batch.quad(notch, TILE * 0.10, TILE * 0.16, angle, lin(Color::srgb(0.9, 0.9, 0.95)));
+    }
+
+    // Power wires between nearby power nodes (poles/generators/consumers).
+    let wire = lin(Color::srgb(0.35, 0.35, 0.45));
+    for i in 0..sim.0.bld_x.len() {
+        if !sim.0.bld_active[i] || !is_power_node(sim.0.bld_kind[i]) {
+            continue;
+        }
+        let a = Vec2::new(sim.0.bld_x[i] as f32 * TILE, sim.0.bld_y[i] as f32 * TILE);
+        for j in (i + 1)..sim.0.bld_x.len() {
+            if !sim.0.bld_active[j] || !is_power_node(sim.0.bld_kind[j]) {
+                continue;
+            }
+            let dx = sim.0.bld_x[i] - sim.0.bld_x[j];
+            let dy = sim.0.bld_y[i] - sim.0.bld_y[j];
+            if (dx * dx + dy * dy) as f32 > POWER_RADIUS2 {
+                continue;
+            }
+            let b = Vec2::new(sim.0.bld_x[j] as f32 * TILE, sim.0.bld_y[j] as f32 * TILE);
+            batch.line(a, b, TILE * 0.02, wire);
+        }
+    }
+
+    if let Some(mesh) = meshes.get_mut(&handles.static_mesh) {
+        batch.write_to(mesh);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+fn emit_item(
+    sim: &BeltSim,
+    batch: &mut MeshBatch,
+    i: usize,
+    belt: u32,
+    alpha: f32,
+    t: f32,
+    detail: bool,
+    palette: &[[f32; 4]],
+) {
+    let lane = sim.item_lane[i] as usize;
+    let cur = item_pos(sim, belt, lane, sim.item_dist[i]);
+    let prev = if sim.item_prev_belt[i] != INVALID {
+        item_pos(sim, sim.item_prev_belt[i], lane, sim.item_prev_dist[i])
+    } else {
+        cur
+    };
+    let pos = prev.lerp(cur, alpha);
+    let kind = sim.item_type[i] as usize;
+    // Per-item-kind shape: circle, square, triangle, pentagon, hexagon.
+    let (sides, base_rot) = match kind {
+        0 => (6u32, 1.0_f32),              // amber circle
+        1 => (4u32, 0.0_f32),              // sky square
+        2 => (3u32, 0.0_f32),              // lime triangle
+        3 => (5u32, 0.0_f32),              // rose pentagon
+        _ => (4u32, std::f32::consts::FRAC_PI_4), // violet diamond
+    };
+    let phase = i as f32 * 0.37;
+    let pulse = if detail {
+        1.0 + (t * 2.0 + phase).sin() * 0.05
+    } else {
+        1.0
+    };
+    let size = TILE * 0.14 * pulse;
+    let color = palette[kind % palette.len()];
+    // Subtle drop-shadow to separate items from belts.
+    let shadow = [0.0, 0.0, 0.0, 0.28];
+    batch.ngon(pos + Vec2::new(1.5, -2.5), size * 1.1, sides, base_rot, shadow);
+    // Soft outer glow (visible under bloom) + inner core.
+    if detail {
+        let glow_color = [color[0], color[1], color[2], 0.18];
+        batch.ngon(pos, size * 1.7, 6, 0.0, glow_color);
+    }
+    batch.ngon(pos, size, sides, base_rot, color);
+}
+
+/// Rebuild the dynamic mesh (items + chevrons) every frame, camera-culled,
+/// with positions interpolated between fixed ticks.
+pub fn build_dynamic_mesh(
+    handles: Res<WorldMeshes>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    sim: Res<Sim>,
+    world: Res<GameWorld>,
+    fixed: Res<Time<Fixed>>,
+    time: Res<Time>,
+    windows: Query<&Window>,
+    cam: Query<(&Transform, &OrthographicProjection), With<Camera>>,
+) {
+    let Ok((cam_tf, proj)) = cam.get_single() else {
+        return;
+    };
+    let Ok(window) = windows.get_single() else {
+        return;
+    };
+    // Visible world rect with a one-tile margin.
+    let half = Vec2::new(window.width(), window.height()) * 0.5 * proj.scale + TILE;
+    let center = cam_tf.translation.truncate();
+    let min = center - half;
+    let max = center + half;
+
+    let alpha = fixed.overstep_fraction();
+    let t = time.elapsed_seconds();
+    let mut batch = MeshBatch::default();
+
+    // Level of detail: when zoomed far out, skip decoration.
+    let detail = proj.scale < 6.0;
+
+    // Walk only the grid tiles inside the view instead of scanning every
+    // item/belt/building in the world.
+    let gw = world.0.width;
+    let tx0 = ((min.x / TILE).floor() as i32).max(0);
+    let tx1 = ((max.x / TILE).ceil() as i32).min(gw - 1);
+    let ty0 = ((min.y / TILE).floor() as i32).max(0);
+    let ty1 = ((max.y / TILE).ceil() as i32).min(world.0.height - 1);
+
+    let chevron_base = Color::srgb(0.55, 0.65, 0.80);
+    let arm_color = lin(Color::srgb(0.85, 0.68, 0.25));
+    let palette: Vec<[f32; 4]> = ITEM_COLORS.iter().map(|c| glow(*c, 2.2)).collect();
+
+    // Hybrid iteration: a small view walks only visible tiles; a large view
+    // scans the item arrays linearly (cache-friendly, no pointer chasing).
+    let visible_tiles = ((tx1 - tx0 + 1).max(0) as i64) * ((ty1 - ty0 + 1).max(0) as i64);
+    if visible_tiles >= 8192 {
+        for i in 0..sim.0.item_capacity() {
+            if !sim.0.item_active[i] {
+                continue;
+            }
+            let belt = sim.0.item_belt[i];
+            let b = belt as usize;
+            let cx = sim.0.belt_x[b] as f32 * TILE;
+            let cy = sim.0.belt_y[b] as f32 * TILE;
+            if cx < min.x || cx > max.x || cy < min.y || cy > max.y {
+                continue;
+            }
+            emit_item(&sim.0, &mut batch, i, belt, alpha, t, detail, &palette);
+        }
+        if let Some(mesh) = meshes.get_mut(&handles.dynamic_mesh) {
+            batch.write_to(mesh);
+        }
+        return;
+    }
+
+    for ty in ty0..=ty1 {
+        for tx in tx0..=tx1 {
+            // ---- belt on this tile: chevrons + items ----
+            let belt = world.0.belt_at(tx, ty);
+            if belt != INVALID && sim.0.belt_active[belt as usize] {
+                let b = belt as usize;
+                let c = Vec2::new(sim.0.belt_x[b] as f32 * TILE, sim.0.belt_y[b] as f32 * TILE);
+                if detail {
+                    let angle = dir_angle(sim.0.belt_dir[b]);
+                    let (dx, dy) = sim.0.belt_dir[b].fvec();
+                    for k in 0..2u32 {
+                        let s = (t * 1.4 + k as f32 * 0.5).fract();
+                        let pos = c + Vec2::new(dx, dy) * (s - 0.5) * TILE * 0.8;
+                        let fade = (s * (1.0 - s) * 4.0).clamp(0.0, 1.0);
+                        batch.quad(pos, TILE * 0.04, TILE * 0.27, angle, lin_a(chevron_base, 0.35 * fade));
+                    }
+                }
+                for lane in 0..crate::belts::LANES {
+                    let mut cur_item = sim.0.belt_head[b][lane];
+                    while cur_item != INVALID {
+                        let i = cur_item as usize;
+                        emit_item(&sim.0, &mut batch, i, belt, alpha, t, detail, &palette);
+                        cur_item = sim.0.item_behind[i];
+                    }
+                }
+            }
+
+            // ---- inserter arm on this tile ----
+            if detail {
+                let bld = world.0.building_at(tx, ty);
+                if bld != INVALID
+                    && sim.0.bld_active[bld as usize]
+                    && sim.0.bld_kind[bld as usize] == BuildingKind::Inserter
+                {
+                    let s = bld as usize;
+                    let c = Vec2::new(sim.0.bld_x[s] as f32 * TILE, sim.0.bld_y[s] as f32 * TILE);
+                    let base = dir_angle(sim.0.bld_dir[s]);
+                    // Swing PI as the cooldown elapses; holding = ahead, empty = behind.
+                    let swing = sim.0.bld_timer[s] as f32 / INSERTER_COOLDOWN as f32;
+                    let angle = if sim.0.bld_held[s] != 0 {
+                        base + std::f32::consts::PI * (1.0 - swing)
+                    } else {
+                        base + std::f32::consts::PI * swing
+                    };
+                    let tip = c + Vec2::from_angle(angle) * TILE * 0.22;
+                    batch.quad(tip, TILE * 0.20, TILE * 0.06, angle, arm_color);
+                    if sim.0.bld_held[s] != 0 {
+                        let kind = (sim.0.bld_held[s] - 1) as usize;
+                        let hand = c + Vec2::from_angle(angle) * TILE * 0.40;
+                        batch.quad(
+                            hand,
+                            TILE * 0.10,
+                            TILE * 0.10,
+                            angle,
+                            glow(ITEM_COLORS[kind % ITEM_COLORS.len()], 2.2),
+                        );
+                    }
+                }
+            }
+            // ---- power status overlay ----
+            if detail {
+                let bld = world.0.building_at(tx, ty);
+                if bld != INVALID
+                    && sim.0.bld_active[bld as usize]
+                    && is_consumer(sim.0.bld_kind[bld as usize])
+                    && !sim.0.bld_powered[bld as usize]
+                {
+                    let s = bld as usize;
+                    let c = Vec2::new(sim.0.bld_x[s] as f32 * TILE, sim.0.bld_y[s] as f32 * TILE);
+                    batch.quad(c, TILE * 0.07, TILE * 0.07, 0.0, lin(Color::srgb(0.95, 0.15, 0.15)));
+                }
+            }
+        }
+    }
+
+    if let Some(mesh) = meshes.get_mut(&handles.dynamic_mesh) {
+        batch.write_to(mesh);
+    }
+}
+
+/// Smooth camera: WASD/arrows pan, wheel zoom, exponential easing.
+pub fn camera_control(
+    time: Res<Time>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut wheel: EventReader<MouseWheel>,
+    mut target: ResMut<CameraTarget>,
+    mut q: Query<(&mut Transform, &mut OrthographicProjection), With<Camera>>,
+) {
+    let dt = time.delta_seconds();
+    let mut pan = Vec2::ZERO;
+    if keys.pressed(KeyCode::KeyW) || keys.pressed(KeyCode::ArrowUp) {
+        pan.y += 1.0;
+    }
+    if keys.pressed(KeyCode::KeyS) || keys.pressed(KeyCode::ArrowDown) {
+        pan.y -= 1.0;
+    }
+    if keys.pressed(KeyCode::KeyA) || keys.pressed(KeyCode::ArrowLeft) {
+        pan.x -= 1.0;
+    }
+    if keys.pressed(KeyCode::KeyD) || keys.pressed(KeyCode::ArrowRight) {
+        pan.x += 1.0;
+    }
+    let zoom = target.zoom;
+    target.pos += pan.normalize_or_zero() * 600.0 * zoom * dt;
+
+    for ev in wheel.read() {
+        target.zoom = (target.zoom * (1.0 - ev.y * 0.1)).clamp(0.25, 20.0);
+    }
+
+    let ease = 1.0 - (-10.0 * dt).exp();
+    if let Ok((mut tf, mut proj)) = q.get_single_mut() {
+        let cur = tf.translation.truncate();
+        let next = cur.lerp(target.pos, ease);
+        tf.translation = next.extend(tf.translation.z);
+        proj.scale += (target.zoom - proj.scale) * ease;
+    }
+}
+
+/// Toggle bloom with B (to measure its GPU cost).
+pub fn toggle_bloom(
+    mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    cam: Query<(Entity, Option<&BloomSettings>), With<Camera>>,
+) {
+    if keys.just_pressed(KeyCode::KeyB) {
+        if let Ok((e, bloom)) = cam.get_single() {
+            if bloom.is_some() {
+                commands.entity(e).remove::<BloomSettings>();
+            } else {
+                commands.entity(e).insert(BloomSettings::NATURAL);
+            }
+        }
+    }
+}
+
+pub fn update_hud(
+    sim: Res<Sim>,
+    editor: Res<EditorState>,
+    selection: Res<Selection>,
+    blueprint: Res<Blueprint>,
+    diagnostics: Res<DiagnosticsStore>,
+    mut q: Query<&mut Text, With<Hud>>,
+) {
+    let fps = diagnostics
+        .get(&FrameTimeDiagnosticsPlugin::FPS)
+        .and_then(|d| d.smoothed())
+        .unwrap_or(0.0);
+    let inspect = if let Some(b) = selection.building {
+        let i = b as usize;
+        format!(
+            "sel: {:?} @({},{}) timer:{} held:{} in:{:?} out:{:?} param:{} delivered:{}",
+            sim.0.bld_kind[i],
+            sim.0.bld_x[i],
+            sim.0.bld_y[i],
+            sim.0.bld_timer[i],
+            sim.0.bld_held[i],
+            sim.0.bld_in[i],
+            sim.0.bld_out[i],
+            sim.0.bld_param[i],
+            sim.0.bld_delivered[i],
+        )
+    } else if !blueprint.tiles.is_empty() {
+        format!("clipboard: {} tiles {}x{}", blueprint.tiles.len(), blueprint.width, blueprint.height)
+    } else if let (Some(s), Some(e)) = (selection.start, selection.end) {
+        format!("selection: ({}, {}) -> ({}, {})", s.0, s.1, e.0, e.1)
+    } else {
+        String::new()
+    };
+    if let Ok(mut text) = q.get_single_mut() {
+        text.sections[0].value = format!(
+            "items: {}   fps: {:.0}   tool: {} ({:?})\n\
+             1-9 tools  0 select  P pole  G gen  R rot  LMB/RMB  Z undo  Y redo  C copy  V paste  F5/F9  B bloom  WASD pan\n\
+             {}",
+            sim.0.active_item_count(),
+            fps,
+            editor.tool_name(),
+            editor.dir,
+            inspect,
+        );
+    }
+}
