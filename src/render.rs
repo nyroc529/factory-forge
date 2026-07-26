@@ -57,11 +57,22 @@ fn item_pos(sim: &BeltSim, belt: u32, lane: usize, dist: f32) -> Vec2 {
 
 // ------------------------------------------------------------- mesh builder
 
-#[derive(Default)]
 struct MeshBatch {
     positions: Vec<[f32; 3]>,
     colors: Vec<[f32; 4]>,
     indices: Vec<u32>,
+}
+
+impl Default for MeshBatch {
+    fn default() -> Self {
+        // Preallocate a reasonable amount so the dynamic mesh doesn't reallocate
+        // every frame while growing.
+        Self {
+            positions: Vec::with_capacity(16384),
+            colors: Vec::with_capacity(16384),
+            indices: Vec::with_capacity(24576),
+        }
+    }
 }
 
 impl MeshBatch {
@@ -152,6 +163,11 @@ pub struct WorldMeshes {
     pub dynamic_mesh: Handle<Mesh>,
 }
 
+/// Precomputed HDR-boosted item colors so the dynamic mesh doesn't rebuild a
+/// palette vector every frame.
+#[derive(Resource)]
+pub struct ItemPalette(pub Vec<[f32; 4]>);
+
 /// Set to true whenever belts/buildings change so the static mesh rebuilds.
 #[derive(Resource)]
 pub struct WorldDirty(pub bool);
@@ -216,6 +232,9 @@ pub fn setup_scene(
         static_mesh,
         dynamic_mesh,
     });
+    commands.insert_resource(ItemPalette(
+        ITEM_COLORS.iter().map(|c| glow(*c, 2.2)).collect(),
+    ));
     commands.insert_resource(WorldDirty(true));
 
     commands.spawn((
@@ -434,6 +453,7 @@ pub fn build_dynamic_mesh(
     mut meshes: ResMut<Assets<Mesh>>,
     sim: Res<Sim>,
     world: Res<GameWorld>,
+    palette: Res<ItemPalette>,
     fixed: Res<Time<Fixed>>,
     time: Res<Time>,
     windows: Query<&Window>,
@@ -468,7 +488,6 @@ pub fn build_dynamic_mesh(
 
     let chevron_base = Color::srgb(0.55, 0.65, 0.80);
     let arm_color = lin(Color::srgb(0.85, 0.68, 0.25));
-    let palette: Vec<[f32; 4]> = ITEM_COLORS.iter().map(|c| glow(*c, 2.2)).collect();
 
     // Hybrid iteration: a small view walks only visible tiles; a large view
     // scans the item arrays linearly (cache-friendly, no pointer chasing).
@@ -485,7 +504,7 @@ pub fn build_dynamic_mesh(
             if cx < min.x || cx > max.x || cy < min.y || cy > max.y {
                 continue;
             }
-            emit_item(&sim.0, &mut batch, i, belt, alpha, t, detail, &palette);
+            emit_item(&sim.0, &mut batch, i, belt, alpha, t, detail, &palette.0);
         }
         if let Some(mesh) = meshes.get_mut(&handles.dynamic_mesh) {
             batch.write_to(mesh);
@@ -514,7 +533,7 @@ pub fn build_dynamic_mesh(
                     let mut cur_item = sim.0.belt_head[b][lane];
                     while cur_item != INVALID {
                         let i = cur_item as usize;
-                        emit_item(&sim.0, &mut batch, i, belt, alpha, t, detail, &palette);
+                        emit_item(&sim.0, &mut batch, i, belt, alpha, t, detail, &palette.0);
                         cur_item = sim.0.item_behind[i];
                     }
                 }
