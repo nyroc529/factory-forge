@@ -46,14 +46,13 @@ fn main() {
         .init_resource::<ui::EditorState>()
         .init_resource::<ui::Selection>()
         .init_resource::<ui::Blueprint>()
-        .add_systems(Startup, (render::setup_scene, ui::setup_ghost, ui::setup_toolbar))
+        .add_systems(Startup, (render::setup_scene, ui::setup_ghost))
         .add_systems(FixedUpdate, run_sim)
         .add_systems(
             Update,
             (
                 ui::handle_editor_input,
                 ui::save_load,
-                ui::update_toolbar,
                 render::rebuild_static_mesh,
                 render::build_dynamic_mesh,
                 render::camera_control,
@@ -78,6 +77,7 @@ fn run_sim(
     mut fluid_prod: Local<Vec<f32>>,
     mut fluid_cons: Local<Vec<f32>>,
     mut fluid_ready: Local<Vec<bool>>,
+    mut fluid_net_count: Local<usize>,
 ) {
     active_chunks.clear();
     let cx = (target.pos.x / (TILE * CHUNK_SIZE as f32)).floor() as i32;
@@ -97,9 +97,15 @@ fn run_sim(
         (0..sim.0.bld_x.len())
             .filter(|&s| sim.0.bld_active[s] && active_chunks.contains(&sim.0.bld_chunk[s])),
     );
-    sim::rebuild_power(&mut sim.0, &active_blds);
-    let net_count =
-        sim::rebuild_fluid_networks(&mut sim.0, &active_blds, &mut fluid_roots);
+    let net_count = if sim.0.dirty_power {
+        sim::rebuild_power(&mut sim.0, &active_blds);
+        let count = sim::rebuild_fluid_networks(&mut sim.0, &active_blds, &mut fluid_roots);
+        sim.0.dirty_power = false;
+        *fluid_net_count = count;
+        count
+    } else {
+        *fluid_net_count
+    };
     fluid_cap.resize(net_count, 0.0);
     fluid_vol.resize(net_count, 0.0);
     fluid_prod.resize(net_count, 0.0);

@@ -173,10 +173,10 @@ pub fn setup_scene(
     mut materials: ResMut<Assets<ColorMaterial>>,
     sim: Res<Sim>,
 ) {
-    // Bloom is opt-in (B key): it costs ~10 FPS on integrated GPUs.
+    // Bloom is opt-in (B key): HDR costs FPS on integrated GPUs, so default off.
     commands.spawn(Camera2dBundle {
         camera: Camera {
-            hdr: true,
+            hdr: false,
             ..default()
         },
         ..default()
@@ -419,9 +419,6 @@ fn emit_item(
     };
     let size = TILE * 0.14 * pulse;
     let color = palette[kind % palette.len()];
-    // Subtle drop-shadow to separate items from belts.
-    let shadow = [0.0, 0.0, 0.0, 0.28];
-    batch.ngon(pos + Vec2::new(1.5, -2.5), size * 1.1, sides, base_rot, shadow);
     // Soft outer glow (visible under bloom) + inner core.
     if detail {
         let glow_color = [color[0], color[1], color[2], 0.18];
@@ -641,13 +638,15 @@ pub fn camera_control(
 pub fn toggle_bloom(
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
-    cam: Query<(Entity, Option<&BloomSettings>), With<Camera>>,
+    mut cam: Query<(Entity, &mut Camera, Option<&BloomSettings>), With<Camera>>,
 ) {
     if keys.just_pressed(KeyCode::KeyB) {
-        if let Ok((e, bloom)) = cam.get_single() {
+        if let Ok((e, mut camera, bloom)) = cam.get_single_mut() {
             if bloom.is_some() {
+                camera.hdr = false;
                 commands.entity(e).remove::<BloomSettings>();
             } else {
+                camera.hdr = true;
                 commands.entity(e).insert(BloomSettings::NATURAL);
             }
         }
@@ -661,7 +660,13 @@ pub fn update_hud(
     blueprint: Res<Blueprint>,
     diagnostics: Res<DiagnosticsStore>,
     mut q: Query<&mut Text, With<Hud>>,
+    mut counter: Local<u32>,
 ) {
+    *counter += 1;
+    // HUD text layout is expensive; refresh at ~10 Hz instead of every frame.
+    if *counter % 6 != 0 {
+        return;
+    }
     let fps = diagnostics
         .get(&FrameTimeDiagnosticsPlugin::FPS)
         .and_then(|d| d.smoothed())
@@ -730,9 +735,7 @@ pub fn update_hud(
     };
     if let Ok(mut text) = q.get_single_mut() {
         text.sections[0].value = format!(
-            "items: {}   fps: {:.0}   tool: {} ({:?}){}\n\
-             1-9 tools  0 select U pipe J pump K tank P pole G gen L lab  R rot/cycle-recipe  LMB/RMB  Z undo  Y redo  C copy  V paste  F5/F9  B bloom  WASD pan\n\
-             {}",
+            "items: {}   fps: {:.0}   tool: {} ({:?}){}\n{}",
             sim.0.active_item_count(),
             fps,
             editor.tool_name(),

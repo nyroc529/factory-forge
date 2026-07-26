@@ -159,6 +159,13 @@ pub struct BeltSim {
     /// True if this assembler's fluid input is satisfied this tick.
     pub bld_fluid_ready: Vec<bool>,
     pub free_blds: Vec<u32>,
+    /// Rebuild power/fluid networks next tick when the world changes.
+    #[serde(default = "default_true")]
+    pub dirty_power: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl BeltSim {
@@ -232,6 +239,7 @@ impl BeltSim {
             self.bld_fluid_network[i] = INVALID;
             self.bld_fluid_ready[i] = false;
             self.bld_chunk[i] = Grid::chunk_key(x, y);
+            self.dirty_power = true;
             return id;
         }
         let id = self.bld_x.len() as u32;
@@ -258,12 +266,14 @@ impl BeltSim {
         self.bld_fluid_network.push(INVALID);
         self.bld_fluid_ready.push(false);
         self.bld_chunk.push(Grid::chunk_key(x, y));
+        self.dirty_power = true;
         id
     }
 
     pub fn remove_building(&mut self, id: u32) {
         self.bld_active[id as usize] = false;
         self.free_blds.push(id);
+        self.dirty_power = true;
     }
 
     pub fn free_item(&mut self, id: u32) {
