@@ -12,7 +12,22 @@ use crate::grid::Grid;
 pub const INVALID: u32 = u32::MAX;
 pub const LANES: usize = 2;
 /// Number of distinct item kinds.
-pub const KINDS: usize = 5;
+pub const KINDS: usize = 11;
+
+/// Human-readable names for item kinds, indexed by kind.
+pub const ITEM_NAMES: [&str; KINDS] = [
+    "iron",
+    "copper",
+    "coal",
+    "gear",
+    "steel",
+    "stone",
+    "oil",
+    "plastic",
+    "circuit",
+    "brick",
+    "science",
+];
 /// Minimum center-to-center spacing between items on a lane (belt-lengths).
 pub const MIN_SPACING: f32 = 0.28;
 /// Belt speed in belt-lengths per simulation tick.
@@ -33,6 +48,7 @@ pub enum BuildingKind {
     Pipe,
     Pump,
     Tank,
+    Lab,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]

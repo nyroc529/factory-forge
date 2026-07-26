@@ -22,11 +22,11 @@ pub struct Recipe {
 
 /// Recipe table. Index 0 is the default starter recipe for new assemblers.
 pub const RECIPES: &[Recipe] = &[
-    // Steel plate: 2 iron (amber) + 1 copper (sky) -> 1 violet (processed alloy)
+    // Steel: 2 iron + 1 copper -> 1 steel
     Recipe {
         name: "steel",
         ticks: 90,
-        input: [2, 1, 0, 0, 0],
+        input: [2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         output_kind: 4,
         output_count: 1,
         fluid_input: 0,
@@ -34,11 +34,11 @@ pub const RECIPES: &[Recipe] = &[
         fluid_output: 0,
         fluid_output_type: 0,
     },
-    // Gear: 2 iron -> 1 rose
+    // Gear: 2 iron -> 1 gear
     Recipe {
         name: "gear",
         ticks: 60,
-        input: [2, 0, 0, 0, 0],
+        input: [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         output_kind: 3,
         output_count: 1,
         fluid_input: 0,
@@ -46,15 +46,63 @@ pub const RECIPES: &[Recipe] = &[
         fluid_output: 0,
         fluid_output_type: 0,
     },
-    // Water alloy: 1 iron + 1 water -> 1 violet
+    // Water steel: 1 iron + 1 water -> 1 steel
     Recipe {
-        name: "water alloy",
+        name: "water steel",
         ticks: 100,
-        input: [1, 0, 0, 0, 0],
+        input: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         output_kind: 4,
         output_count: 1,
         fluid_input: 1,
         fluid_input_type: 1,
+        fluid_output: 0,
+        fluid_output_type: 0,
+    },
+    // Brick: 2 stone -> 1 brick
+    Recipe {
+        name: "brick",
+        ticks: 80,
+        input: [0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0],
+        output_kind: 9,
+        output_count: 1,
+        fluid_input: 0,
+        fluid_input_type: 0,
+        fluid_output: 0,
+        fluid_output_type: 0,
+    },
+    // Plastic: 1 coal + 2 oil -> 1 plastic
+    Recipe {
+        name: "plastic",
+        ticks: 120,
+        input: [0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 0],
+        output_kind: 7,
+        output_count: 1,
+        fluid_input: 0,
+        fluid_input_type: 0,
+        fluid_output: 0,
+        fluid_output_type: 0,
+    },
+    // Circuit: 1 iron + 2 copper + 1 plastic -> 1 circuit
+    Recipe {
+        name: "circuit",
+        ticks: 150,
+        input: [1, 2, 0, 0, 0, 0, 0, 1, 0, 0, 0],
+        output_kind: 8,
+        output_count: 1,
+        fluid_input: 0,
+        fluid_input_type: 0,
+        fluid_output: 0,
+        fluid_output_type: 0,
+    },
+    // Science pack: 1 steel + 1 plastic + 1 circuit -> 1 science
+    Recipe {
+        name: "science pack",
+        ticks: 200,
+        input: [0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0],
+        output_kind: 10,
+        output_count: 1,
+        fluid_input: 0,
+        fluid_input_type: 0,
         fluid_output: 0,
         fluid_output_type: 0,
     },
@@ -79,6 +127,7 @@ pub fn is_consumer(kind: BuildingKind) -> bool {
             | BuildingKind::Shipment
             | BuildingKind::Splitter
             | BuildingKind::Pump
+            | BuildingKind::Lab
     )
 }
 
@@ -434,6 +483,15 @@ fn drop_to_building(sim: &mut BeltSim, bld: u32, kind: u16) -> bool {
                 false
             }
         }
+        BuildingKind::Lab => {
+            const SCIENCE: usize = 10;
+            if k == SCIENCE && sim.bld_in[b][SCIENCE] < STORAGE_CAP {
+                sim.bld_in[b][SCIENCE] += 1;
+                true
+            } else {
+                false
+            }
+        }
         BuildingKind::Assembler => {
             if let Some(r) = RECIPES.get(sim.bld_param[b] as usize) {
                 if r.input[k] > 0 && sim.bld_in[b][k] < STORAGE_CAP {
@@ -602,6 +660,20 @@ pub fn tick_buildings(sim: &mut BeltSim, grid: &Grid, active_blds: &[usize]) {
                 }
             }
             BuildingKind::Pole | BuildingKind::Generator | BuildingKind::Pipe | BuildingKind::Pump | BuildingKind::Tank => {}
+            BuildingKind::Lab => {
+                if sim.bld_timer[s] > 0 {
+                    sim.bld_timer[s] -= 1;
+                    continue;
+                }
+                const SCIENCE: usize = 10;
+                if sim.bld_in[s][SCIENCE] > 0 {
+                    sim.bld_in[s][SCIENCE] -= 1;
+                    if sim.bld_delivered[s] < u32::MAX {
+                        sim.bld_delivered[s] += 1;
+                    }
+                    sim.bld_timer[s] = 6;
+                }
+            }
         }
     }
 }

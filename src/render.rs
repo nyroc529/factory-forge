@@ -14,7 +14,7 @@ use bevy::render::render_asset::RenderAssetUsages;
 use bevy::render::view::NoFrustumCulling;
 use bevy::sprite::{MaterialMesh2dBundle, Mesh2dHandle};
 
-use crate::belts::{BeltSim, BuildingKind, Dir, INVALID};
+use crate::belts::{BeltSim, BuildingKind, Dir, INVALID, ITEM_NAMES};
 use crate::sim::{INSERTER_COOLDOWN, RECIPES, is_consumer, is_power_node, POWER_RADIUS2};
 use crate::ui::{Blueprint, EditorState, Selection};
 use crate::{GameWorld, Sim};
@@ -22,12 +22,18 @@ use crate::{GameWorld, Sim};
 pub const TILE: f32 = 48.0;
 const LANE_OFFSET: f32 = 0.22;
 
-pub const ITEM_COLORS: [Color; 5] = [
-    Color::srgb(0.99, 0.76, 0.18), // amber
-    Color::srgb(0.35, 0.78, 0.98), // sky
-    Color::srgb(0.55, 0.92, 0.45), // lime
-    Color::srgb(0.96, 0.45, 0.55), // rose
-    Color::srgb(0.75, 0.55, 0.98), // violet
+pub const ITEM_COLORS: [Color; 11] = [
+    Color::srgb(0.99, 0.76, 0.18), // 0 iron
+    Color::srgb(0.35, 0.78, 0.98), // 1 copper
+    Color::srgb(0.20, 0.20, 0.22), // 2 coal
+    Color::srgb(0.96, 0.45, 0.55), // 3 gear
+    Color::srgb(0.75, 0.55, 0.98), // 4 steel
+    Color::srgb(0.62, 0.62, 0.60), // 5 stone
+    Color::srgb(0.25, 0.15, 0.35), // 6 oil
+    Color::srgb(0.95, 0.92, 0.85), // 7 plastic
+    Color::srgb(0.20, 0.80, 0.35), // 8 circuit
+    Color::srgb(0.72, 0.40, 0.22), // 9 brick
+    Color::srgb(0.25, 0.85, 0.95), // 10 science
 ];
 
 pub fn dir_angle(dir: Dir) -> f32 {
@@ -320,6 +326,7 @@ pub fn rebuild_static_mesh(
             BuildingKind::Pipe => lin(Color::srgb(0.45, 0.45, 0.55)),
             BuildingKind::Pump => lin(Color::srgb(0.25, 0.45, 0.65)),
             BuildingKind::Tank => lin(Color::srgb(0.45, 0.50, 0.55)),
+            BuildingKind::Lab => lin(Color::srgb(0.20, 0.55, 0.45)),
         };
         batch.quad(c, half, half, 0.0, body);
         // Direction notch on the output/input edge.
@@ -392,13 +399,19 @@ fn emit_item(
     };
     let pos = prev.lerp(cur, alpha);
     let kind = sim.item_type[i] as usize;
-    // Per-item-kind shape: circle, square, triangle, pentagon, hexagon.
+    // Per-item-kind shape and rotation so the expanded palette is readable.
     let (sides, base_rot) = match kind {
-        0 => (6u32, 1.0_f32),              // amber circle
-        1 => (4u32, 0.0_f32),              // sky square
-        2 => (3u32, 0.0_f32),              // lime triangle
-        3 => (5u32, 0.0_f32),              // rose pentagon
-        _ => (4u32, std::f32::consts::FRAC_PI_4), // violet diamond
+        0 => (6u32, 1.0_f32),                        // iron: circle
+        1 => (4u32, 0.0_f32),                        // copper: square
+        2 => (3u32, 0.0_f32),                        // coal: triangle
+        3 => (5u32, 0.0_f32),                        // gear: pentagon
+        4 => (4u32, std::f32::consts::FRAC_PI_4),    // steel: diamond
+        5 => (6u32, std::f32::consts::FRAC_PI_6),    // stone: hexagon
+        6 => (7u32, 0.0_f32),                        // oil: heptagon
+        7 => (8u32, 0.0_f32),                        // plastic: octagon
+        8 => (9u32, 0.0_f32),                        // circuit: nonagon
+        9 => (10u32, 0.0_f32),                       // brick: decagon
+        _ => (11u32, 0.0_f32),                       // science: hendecagon
     };
     let phase = i as f32 * 0.37;
     let pulse = if detail {
@@ -673,15 +686,28 @@ pub fn update_hud(
         } else {
             ""
         };
+        let held = if sim.0.bld_held[i] == 0 {
+            "none".to_string()
+        } else {
+            ITEM_NAMES[(sim.0.bld_held[i] as usize - 1) % ITEM_NAMES.len()].to_string()
+        };
+        let inventory = |inv: &[u16]| -> String {
+            inv.iter()
+                .enumerate()
+                .filter(|(_, &c)| c > 0)
+                .map(|(k, &c)| format!("{}:{}", ITEM_NAMES[k], c))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
         format!(
-            "sel: {:?} @({},{}) timer:{} held:{} in:{:?} out:{:?} recipe:{} param:{} delivered:{}{}",
+            "sel: {:?} @({},{}) timer:{} held:{} in:{} out:{} recipe:{} param:{} delivered:{}{}",
             sim.0.bld_kind[i],
             sim.0.bld_x[i],
             sim.0.bld_y[i],
             sim.0.bld_timer[i],
-            sim.0.bld_held[i],
-            sim.0.bld_in[i],
-            sim.0.bld_out[i],
+            held,
+            inventory(&sim.0.bld_in[i]),
+            inventory(&sim.0.bld_out[i]),
             recipe,
             sim.0.bld_param[i],
             sim.0.bld_delivered[i],
@@ -705,7 +731,7 @@ pub fn update_hud(
     if let Ok(mut text) = q.get_single_mut() {
         text.sections[0].value = format!(
             "items: {}   fps: {:.0}   tool: {} ({:?}){}\n\
-             1-9 tools  0 select U pipe J pump K tank P pole G gen  R rot/cycle-recipe  LMB/RMB  Z undo  Y redo  C copy  V paste  F5/F9  B bloom  WASD pan\n\
+             1-9 tools  0 select U pipe J pump K tank P pole G gen L lab  R rot/cycle-recipe  LMB/RMB  Z undo  Y redo  C copy  V paste  F5/F9  B bloom  WASD pan\n\
              {}",
             sim.0.active_item_count(),
             fps,

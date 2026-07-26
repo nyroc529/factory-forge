@@ -171,12 +171,14 @@ fn build_demo_world() -> (BeltSim, Grid) {
     (sim, grid)
 }
 
-/// Place circular ore patches for amber, sky, and lime.
+/// Place circular ore patches for the five raw resources.
 fn generate_ore_patches(grid: &mut Grid, rng: &mut StdRng) {
-    for _ in 0..8 {
+    // Stored ore kind is item_index + 1: 1 iron, 2 copper, 3 coal, 6 stone, 7 oil.
+    let kinds = [1u8, 2, 3, 6, 7];
+    for _ in 0..12 {
         let cx: i32 = rng.gen_range(10..(grid.width - 10));
         let cy: i32 = rng.gen_range(10..(grid.height - 10));
-        let kind: u8 = rng.gen_range(1..=3); // ore kind + 1
+        let kind = kinds[rng.gen_range(0..kinds.len())];
         let radius: f32 = rng.gen_range(3.0..6.0);
         for y in (cy - radius as i32 - 1)..(cy + radius as i32 + 1) {
             for x in (cx - radius as i32 - 1)..(cx + radius as i32 + 1) {
@@ -192,7 +194,7 @@ fn generate_ore_patches(grid: &mut Grid, rng: &mut StdRng) {
             }
         }
     }
-    // Ensure the starter patch at (10,10) is amber.
+    // Ensure the starter patch at (10,10) is iron.
     for y in 8..=12 {
         for x in 8..=12 {
             if (x - 10) * (x - 10) + (y - 10) * (y - 10) <= 8 {

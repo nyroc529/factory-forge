@@ -89,6 +89,7 @@ pub enum Tool {
     Pipe,
     Pump,
     Tank,
+    Lab,
 }
 
 #[derive(Resource)]
@@ -131,6 +132,7 @@ impl EditorState {
             Tool::Pipe => "pipe",
             Tool::Pump => "pump",
             Tool::Tank => "tank",
+            Tool::Lab => "lab",
         }
     }
 }
@@ -273,6 +275,9 @@ pub fn handle_editor_input(
     }
     if keys.just_pressed(KeyCode::KeyK) {
         editor.tool = Tool::Tank;
+    }
+    if keys.just_pressed(KeyCode::KeyL) {
+        editor.tool = Tool::Lab;
     }
     if keys.just_pressed(KeyCode::Escape) {
         editor.tool = Tool::Belt;
@@ -490,6 +495,13 @@ pub fn handle_editor_input(
             Tool::Tank => {
                 if free {
                     let id = sim.0.add_building(tx, ty, editor.dir, BuildingKind::Tank);
+                    world.0.set_building(tx, ty, id);
+                    changed = true;
+                }
+            }
+            Tool::Lab => {
+                if free {
+                    let id = sim.0.add_building(tx, ty, editor.dir, BuildingKind::Lab);
                     world.0.set_building(tx, ty, id);
                     changed = true;
                 }
