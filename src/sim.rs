@@ -9,27 +9,54 @@ pub const ITEM_KINDS: u16 = KINDS as u16;
 
 /// A craftable recipe.
 pub struct Recipe {
+    pub name: &'static str,
     pub ticks: u16,
     pub input: [u16; KINDS],
     pub output_kind: usize,
     pub output_count: u16,
+    pub fluid_input: u16,
+    pub fluid_input_type: u8,
+    pub fluid_output: u16,
+    pub fluid_output_type: u8,
 }
 
 /// Recipe table. Index 0 is the default starter recipe for new assemblers.
 pub const RECIPES: &[Recipe] = &[
     // Steel plate: 2 iron (amber) + 1 copper (sky) -> 1 violet (processed alloy)
     Recipe {
+        name: "steel",
         ticks: 90,
         input: [2, 1, 0, 0, 0],
         output_kind: 4,
         output_count: 1,
+        fluid_input: 0,
+        fluid_input_type: 0,
+        fluid_output: 0,
+        fluid_output_type: 0,
     },
     // Gear: 2 iron -> 1 rose
     Recipe {
+        name: "gear",
         ticks: 60,
         input: [2, 0, 0, 0, 0],
         output_kind: 3,
         output_count: 1,
+        fluid_input: 0,
+        fluid_input_type: 0,
+        fluid_output: 0,
+        fluid_output_type: 0,
+    },
+    // Water alloy: 1 iron + 1 water -> 1 violet
+    Recipe {
+        name: "water alloy",
+        ticks: 100,
+        input: [1, 0, 0, 0, 0],
+        output_kind: 4,
+        output_count: 1,
+        fluid_input: 1,
+        fluid_input_type: 1,
+        fluid_output: 0,
+        fluid_output_type: 0,
     },
 ];
 
@@ -37,6 +64,7 @@ pub const INSERTER_COOLDOWN: u16 = 12;
 pub const MINER_COOLDOWN: u16 = 30;
 pub const SPLITTER_COOLDOWN: u16 = 6;
 pub const STORAGE_CAP: u16 = 50;
+pub const FLUID_PUMP_RATE: f32 = 0.5;
 pub const POWER_RADIUS: f32 = 7.0;
 pub const POWER_RADIUS2: f32 = POWER_RADIUS * POWER_RADIUS;
 
@@ -50,6 +78,7 @@ pub fn is_consumer(kind: BuildingKind) -> bool {
             | BuildingKind::Storage
             | BuildingKind::Shipment
             | BuildingKind::Splitter
+            | BuildingKind::Pump
     )
 }
 
@@ -65,6 +94,7 @@ pub fn is_power_node(kind: BuildingKind) -> bool {
             | BuildingKind::Storage
             | BuildingKind::Shipment
             | BuildingKind::Splitter
+            | BuildingKind::Pump
     )
 }
 
@@ -147,6 +177,161 @@ pub fn rebuild_power(sim: &mut BeltSim, active_blds: &[usize]) {
         if have >= need {
             sim.bld_powered[s] = true;
         }
+    }
+}
+
+/// Recompute connected fluid networks among active buildings (call each tick).
+pub fn rebuild_fluid_networks(sim: &mut BeltSim, active_blds: &[usize]) {
+    // Refresh assembler capacities in case the recipe changed.
+    for &s in active_blds {
+        let cap = match sim.bld_kind[s] {
+            BuildingKind::Pipe => 1,
+            BuildingKind::Pump => 1,
+            BuildingKind::Tank => 50,
+            BuildingKind::Assembler => {
+                let recipe_idx = sim.bld_param[s] as usize;
+                if let Some(r) = RECIPES.get(recipe_idx) {
+                    if r.fluid_input > 0 || r.fluid_output > 0 {
+                        1
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                }
+            }
+            _ => 0,
+        };
+        sim.bld_fluid_capacity[s] = cap;
+        if cap == 0 {
+            sim.bld_fluid_network[s] = INVALID;
+        }
+    }
+
+    let nodes: Vec<usize> = active_blds
+        .iter()
+        .copied()
+        .filter(|&s| sim.bld_fluid_capacity[s] > 0)
+        .collect();
+    let n = nodes.len();
+    let mut uf = UnionFind::new(n);
+    for i in 0..n {
+        let a = nodes[i];
+        for j in (i + 1)..n {
+            let b = nodes[j];
+            let dx = sim.bld_x[a] - sim.bld_x[b];
+            let dy = sim.bld_y[a] - sim.bld_y[b];
+            if dx.abs() + dy.abs() == 1 {
+                uf.union(i, j);
+            }
+        }
+    }
+
+    let mut net_id = 0u32;
+    let mut root_to_id = std::collections::HashMap::new();
+    for idx in 0..n {
+        let root = uf.find(idx);
+        let id = *root_to_id.entry(root).or_insert_with(|| {
+            let cur = net_id;
+            net_id += 1;
+            cur
+        });
+        sim.bld_fluid_network[nodes[idx]] = id;
+    }
+}
+
+/// Resolve fluid production/consumption per network for this tick.
+pub fn tick_fluids(sim: &mut BeltSim, active_blds: &[usize]) {
+    for &s in active_blds {
+        sim.bld_fluid_ready[s] = false;
+    }
+
+    let mut cap = std::collections::HashMap::<u32, f32>::new();
+    let mut vol = std::collections::HashMap::<u32, f32>::new();
+    let mut prod = std::collections::HashMap::<u32, f32>::new();
+    let mut cons = std::collections::HashMap::<u32, f32>::new();
+
+    for &s in active_blds {
+        let capacity = sim.bld_fluid_capacity[s];
+        if capacity == 0 || sim.bld_fluid_network[s] == INVALID {
+            continue;
+        }
+        let net = sim.bld_fluid_network[s];
+        *cap.entry(net).or_default() += capacity as f32;
+        *vol.entry(net).or_default() += sim.bld_fluid_volume[s];
+        // Pumps and assemblers only move fluid when powered.
+        if !sim.bld_powered[s] {
+            continue;
+        }
+        match sim.bld_kind[s] {
+            BuildingKind::Pump => {
+                *prod.entry(net).or_default() += FLUID_PUMP_RATE;
+            }
+            BuildingKind::Assembler => {
+                let recipe_idx = sim.bld_param[s] as usize;
+                if let Some(r) = RECIPES.get(recipe_idx) {
+                    if r.fluid_input > 0
+                        && sim.bld_timer[s] == 0
+                        && (0..KINDS).all(|k| sim.bld_in[s][k] >= r.input[k])
+                        && sim.bld_out[s][r.output_kind] < STORAGE_CAP
+                    {
+                        *cons.entry(net).or_default() += r.fluid_input as f32;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut satisfied = std::collections::HashSet::<u32>::new();
+    for &net in cap.keys() {
+        let have = vol.get(&net).copied().unwrap_or(0.0) + prod.get(&net).copied().unwrap_or(0.0);
+        let need = cons.get(&net).copied().unwrap_or(0.0);
+        if have >= need {
+            satisfied.insert(net);
+        }
+    }
+
+    for &s in active_blds {
+        if sim.bld_fluid_capacity[s] == 0 || sim.bld_fluid_network[s] == INVALID {
+            continue;
+        }
+        if sim.bld_kind[s] == BuildingKind::Assembler && sim.bld_timer[s] == 0 {
+            let net = sim.bld_fluid_network[s];
+            let recipe_idx = sim.bld_param[s] as usize;
+            if let Some(r) = RECIPES.get(recipe_idx) {
+                if r.fluid_input > 0
+                    && (0..KINDS).all(|k| sim.bld_in[s][k] >= r.input[k])
+                    && sim.bld_out[s][r.output_kind] < STORAGE_CAP
+                    && satisfied.contains(&net)
+                {
+                    sim.bld_fluid_ready[s] = true;
+                }
+            }
+        }
+    }
+
+    let mut new_vol = std::collections::HashMap::<u32, f32>::new();
+    for (&net, &total_cap) in &cap {
+        let have = vol.get(&net).copied().unwrap_or(0.0) + prod.get(&net).copied().unwrap_or(0.0);
+        let need = cons.get(&net).copied().unwrap_or(0.0);
+        let after = if satisfied.contains(&net) {
+            have - need
+        } else {
+            have
+        };
+        new_vol.insert(net, after.clamp(0.0, total_cap));
+    }
+
+    for &s in active_blds {
+        let capacity = sim.bld_fluid_capacity[s];
+        if capacity == 0 || sim.bld_fluid_network[s] == INVALID {
+            continue;
+        }
+        let net = sim.bld_fluid_network[s];
+        let total_cap = cap.get(&net).copied().unwrap_or(1.0);
+        let total_new = new_vol.get(&net).copied().unwrap_or(0.0);
+        sim.bld_fluid_volume[s] = total_new * (capacity as f32 / total_cap);
     }
 }
 
@@ -332,14 +517,20 @@ pub fn tick_buildings(sim: &mut BeltSim, grid: &Grid, active_blds: &[usize]) {
                         sim.bld_timer[s] -= 1;
                     } else if sim.bld_timer[s] == 1 {
                         sim.bld_out[s][r.output_kind] += r.output_count;
+                        if r.fluid_output > 0 {
+                            sim.bld_fluid_volume[s] += r.fluid_output as f32;
+                        }
                         sim.bld_timer[s] = 0;
                     } else {
+                        let fluid_ok = r.fluid_input == 0 || sim.bld_fluid_ready[s];
                         let can_craft = (0..KINDS).all(|k| sim.bld_in[s][k] >= r.input[k])
-                            && sim.bld_out[s][r.output_kind] < STORAGE_CAP;
+                            && sim.bld_out[s][r.output_kind] < STORAGE_CAP
+                            && fluid_ok;
                         if can_craft {
                             for k in 0..KINDS {
                                 sim.bld_in[s][k] -= r.input[k];
                             }
+                            sim.bld_fluid_volume[s] -= r.fluid_input as f32;
                             sim.bld_timer[s] = r.ticks;
                         }
                     }
@@ -389,8 +580,81 @@ pub fn tick_buildings(sim: &mut BeltSim, grid: &Grid, active_blds: &[usize]) {
                     }
                 }
             }
-            BuildingKind::Pole | BuildingKind::Generator => {}
+            BuildingKind::Pole | BuildingKind::Generator | BuildingKind::Pipe | BuildingKind::Pump | BuildingKind::Tank => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::belts::{BeltSim, Dir};
+    use crate::grid::Grid;
+
+    #[test]
+    fn fluid_network_powers_crafting() {
+        let mut sim = BeltSim::default();
+        let grid = Grid::new(20, 20);
+
+        let gen = sim.add_building(0, 0, Dir::East, BuildingKind::Generator);
+        sim.bld_param[gen as usize] = 10;
+        let pump = sim.add_building(2, 0, Dir::East, BuildingKind::Pump);
+        let _pipe = sim.add_building(3, 0, Dir::East, BuildingKind::Pipe);
+        let tank = sim.add_building(4, 0, Dir::East, BuildingKind::Tank);
+        let asm = sim.add_building(5, 0, Dir::East, BuildingKind::Assembler);
+        sim.bld_param[asm as usize] = 2; // water alloy: 1 amber + 1 water -> 1 violet
+        sim.bld_in[asm as usize][0] = 20; // preload amber
+
+        let active_blds: Vec<usize> = (0..sim.bld_x.len())
+            .filter(|&s| sim.bld_active[s])
+            .collect();
+        let active_belts: Vec<usize> = vec![];
+
+        rebuild_power(&mut sim, &active_blds);
+        assert!(sim.bld_powered[pump as usize], "pump must be powered");
+        for _ in 0..250 {
+            rebuild_fluid_networks(&mut sim, &active_blds);
+            tick_fluids(&mut sim, &active_blds);
+            tick_buildings(&mut sim, &grid, &active_blds);
+            tick(&mut sim, &active_belts);
+        }
+
+        assert!(
+            sim.bld_fluid_volume[tank as usize] > 0.0,
+            "tank should contain water"
+        );
+        assert!(
+            sim.bld_out[asm as usize][4] > 0,
+            "assembler should have produced violet"
+        );
+    }
+
+    #[test]
+    fn unpowered_pump_produces_no_water() {
+        let mut sim = BeltSim::default();
+        let grid = Grid::new(20, 20);
+
+        let _pump = sim.add_building(0, 0, Dir::East, BuildingKind::Pump);
+        let _pipe = sim.add_building(1, 0, Dir::East, BuildingKind::Pipe);
+        let tank = sim.add_building(2, 0, Dir::East, BuildingKind::Tank);
+
+        let active_blds: Vec<usize> = (0..sim.bld_x.len())
+            .filter(|&s| sim.bld_active[s])
+            .collect();
+        let active_belts: Vec<usize> = vec![];
+
+        rebuild_power(&mut sim, &active_blds);
+        for _ in 0..100 {
+            rebuild_fluid_networks(&mut sim, &active_blds);
+            tick_fluids(&mut sim, &active_blds);
+            tick_buildings(&mut sim, &grid, &active_blds);
+            tick(&mut sim, &active_belts);
+        }
+
+        assert_eq!(
+            sim.bld_fluid_volume[tank as usize], 0.0,
+            "tank should be empty without power"
+        );
     }
 }
 

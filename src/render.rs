@@ -15,7 +15,7 @@ use bevy::render::view::NoFrustumCulling;
 use bevy::sprite::{MaterialMesh2dBundle, Mesh2dHandle};
 
 use crate::belts::{BeltSim, BuildingKind, Dir, INVALID};
-use crate::sim::{INSERTER_COOLDOWN, is_consumer, is_power_node, POWER_RADIUS2};
+use crate::sim::{INSERTER_COOLDOWN, RECIPES, is_consumer, is_power_node, POWER_RADIUS2};
 use crate::ui::{Blueprint, EditorState, Selection};
 use crate::{GameWorld, Sim};
 
@@ -298,10 +298,11 @@ pub fn rebuild_static_mesh(
         }
         let c = Vec2::new(sim.0.bld_x[i] as f32 * TILE, sim.0.bld_y[i] as f32 * TILE);
         let angle = dir_angle(sim.0.bld_dir[i]);
-        let half = if sim.0.bld_kind[i] == BuildingKind::Inserter {
-            TILE * 0.32
-        } else {
-            TILE * 0.45
+        let half = match sim.0.bld_kind[i] {
+            BuildingKind::Inserter => TILE * 0.32,
+            BuildingKind::Pipe | BuildingKind::Pump => TILE * 0.22,
+            BuildingKind::Tank => TILE * 0.45,
+            _ => TILE * 0.45,
         };
         // Dark outline makes buildings pop off the belts/ore.
         batch.quad(c, half + TILE * 0.03, half + TILE * 0.03, 0.0, outline);
@@ -316,12 +317,32 @@ pub fn rebuild_static_mesh(
             BuildingKind::Splitter => lin(Color::srgb(0.55, 0.50, 0.18)),
             BuildingKind::Pole => lin(Color::srgb(0.55, 0.55, 0.60)),
             BuildingKind::Generator => lin(Color::srgb(0.90, 0.80, 0.25)),
+            BuildingKind::Pipe => lin(Color::srgb(0.45, 0.45, 0.55)),
+            BuildingKind::Pump => lin(Color::srgb(0.25, 0.45, 0.65)),
+            BuildingKind::Tank => lin(Color::srgb(0.45, 0.50, 0.55)),
         };
         batch.quad(c, half, half, 0.0, body);
         // Direction notch on the output/input edge.
         let (dx, dy) = sim.0.bld_dir[i].fvec();
         let notch = c + Vec2::new(dx, dy) * TILE * 0.32;
         batch.quad(notch, TILE * 0.10, TILE * 0.16, angle, lin(Color::srgb(0.9, 0.9, 0.95)));
+
+        // Pipe connections between adjacent fluid nodes.
+        if sim.0.bld_fluid_capacity[i] > 0 {
+            let pipe_color = lin(Color::srgb(0.35, 0.35, 0.45));
+            for (dx, dy) in [(1, 0), (0, 1)] {
+                let nx = sim.0.bld_x[i] + dx;
+                let ny = sim.0.bld_y[i] + dy;
+                let nb = world.0.building_at(nx, ny);
+                if nb != INVALID {
+                    let j = nb as usize;
+                    if sim.0.bld_active[j] && sim.0.bld_fluid_capacity[j] > 0 {
+                        let nc = Vec2::new(nx as f32 * TILE, ny as f32 * TILE);
+                        batch.line(c, nc, TILE * 0.08, pipe_color);
+                    }
+                }
+            }
+        }
     }
 
     // Power wires between nearby power nodes (poles/generators/consumers).
@@ -536,6 +557,27 @@ pub fn build_dynamic_mesh(
                     batch.quad(c, TILE * 0.07, TILE * 0.07, 0.0, lin(Color::srgb(0.95, 0.15, 0.15)));
                 }
             }
+
+            // ---- fluid fill overlay ----
+            if detail {
+                let bld = world.0.building_at(tx, ty);
+                if bld != INVALID && sim.0.bld_active[bld as usize] {
+                    let s = bld as usize;
+                    let cap = sim.0.bld_fluid_capacity[s];
+                    if cap > 0 {
+                        let vol = sim.0.bld_fluid_volume[s];
+                        let ratio = (vol / cap as f32).clamp(0.0, 1.0);
+                        let c = Vec2::new(sim.0.bld_x[s] as f32 * TILE, sim.0.bld_y[s] as f32 * TILE);
+                        let mut water = lin(Color::srgb(0.15, 0.55, 0.95));
+                        water[3] *= ratio;
+                        let size = match sim.0.bld_kind[s] {
+                            BuildingKind::Tank => TILE * 0.35,
+                            _ => TILE * 0.12,
+                        };
+                        batch.quad(c, size, size, 0.0, water);
+                    }
+                }
+            }
         }
     }
 
@@ -613,8 +655,26 @@ pub fn update_hud(
         .unwrap_or(0.0);
     let inspect = if let Some(b) = selection.building {
         let i = b as usize;
+        let fluid = if sim.0.bld_fluid_capacity[i] > 0 {
+            format!(
+                " fluid:{:.2}/{} ready:{}",
+                sim.0.bld_fluid_volume[i],
+                sim.0.bld_fluid_capacity[i],
+                sim.0.bld_fluid_ready[i] as u8
+            )
+        } else {
+            String::new()
+        };
+        let recipe = if sim.0.bld_kind[i] == BuildingKind::Assembler {
+            RECIPES
+                .get(sim.0.bld_param[i] as usize)
+                .map(|r| r.name)
+                .unwrap_or("none")
+        } else {
+            ""
+        };
         format!(
-            "sel: {:?} @({},{}) timer:{} held:{} in:{:?} out:{:?} param:{} delivered:{}",
+            "sel: {:?} @({},{}) timer:{} held:{} in:{:?} out:{:?} recipe:{} param:{} delivered:{}{}",
             sim.0.bld_kind[i],
             sim.0.bld_x[i],
             sim.0.bld_y[i],
@@ -622,8 +682,10 @@ pub fn update_hud(
             sim.0.bld_held[i],
             sim.0.bld_in[i],
             sim.0.bld_out[i],
+            recipe,
             sim.0.bld_param[i],
             sim.0.bld_delivered[i],
+            fluid
         )
     } else if !blueprint.tiles.is_empty() {
         format!("clipboard: {} tiles {}x{}", blueprint.tiles.len(), blueprint.width, blueprint.height)
@@ -632,15 +694,24 @@ pub fn update_hud(
     } else {
         String::new()
     };
+    let recipe_hint = if editor.tool == crate::ui::Tool::Assembler {
+        RECIPES
+            .get(editor.recipe as usize)
+            .map(|r| format!(" recipe:{}", r.name))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
     if let Ok(mut text) = q.get_single_mut() {
         text.sections[0].value = format!(
-            "items: {}   fps: {:.0}   tool: {} ({:?})\n\
-             1-9 tools  0 select  P pole  G gen  R rot  LMB/RMB  Z undo  Y redo  C copy  V paste  F5/F9  B bloom  WASD pan\n\
+            "items: {}   fps: {:.0}   tool: {} ({:?}){}\n\
+             1-9 tools  0 select U pipe J pump K tank P pole G gen  R rot/cycle-recipe  LMB/RMB  Z undo  Y redo  C copy  V paste  F5/F9  B bloom  WASD pan\n\
              {}",
             sim.0.active_item_count(),
             fps,
             editor.tool_name(),
             editor.dir,
+            recipe_hint,
             inspect,
         );
     }

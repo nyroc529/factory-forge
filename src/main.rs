@@ -84,6 +84,8 @@ fn run_sim(
         .filter(|&s| sim.0.bld_active[s] && active.contains(&sim.0.bld_chunk[s]))
         .collect();
     sim::rebuild_power(&mut sim.0, &active_blds);
+    sim::rebuild_fluid_networks(&mut sim.0, &active_blds);
+    sim::tick_fluids(&mut sim.0, &active_blds);
     sim::tick_buildings(&mut sim.0, &world.0, &active_blds);
     sim::tick(&mut sim.0, &active_belts);
 }

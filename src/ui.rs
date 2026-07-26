@@ -86,12 +86,17 @@ pub enum Tool {
     Paste,
     Pole,
     Generator,
+    Pipe,
+    Pump,
+    Tank,
 }
 
 #[derive(Resource)]
 pub struct EditorState {
     pub tool: Tool,
     pub dir: Dir,
+    /// Recipe index to use for newly placed assemblers.
+    pub recipe: u16,
     /// Last tile a belt was painted on during the current drag.
     pub last_tile: Option<(i32, i32)>,
 }
@@ -101,6 +106,7 @@ impl Default for EditorState {
         Self {
             tool: Tool::Belt,
             dir: Dir::East,
+            recipe: 0,
             last_tile: None,
         }
     }
@@ -122,6 +128,9 @@ impl EditorState {
             Tool::Paste => "paste",
             Tool::Pole => "pole",
             Tool::Generator => "generator",
+            Tool::Pipe => "pipe",
+            Tool::Pump => "pump",
+            Tool::Tank => "tank",
         }
     }
 }
@@ -212,7 +221,21 @@ pub fn handle_editor_input(
         editor.tool = Tool::Splitter;
     }
     if keys.just_pressed(KeyCode::KeyR) {
-        editor.dir = editor.dir.rotated();
+        if editor.tool == Tool::Assembler {
+            editor.recipe = ((editor.recipe as usize + 1) % crate::sim::RECIPES.len()) as u16;
+        } else if editor.tool == Tool::Select {
+            if let Some(b) = selection.building {
+                let i = b as usize;
+                if sim.0.bld_active[i] && sim.0.bld_kind[i] == BuildingKind::Assembler {
+                    let next = (sim.0.bld_param[i] as usize + 1) % crate::sim::RECIPES.len();
+                    sim.0.bld_param[i] = next as u16;
+                    editor.recipe = sim.0.bld_param[i];
+                    dirty.0 = true;
+                }
+            }
+        } else {
+            editor.dir = editor.dir.rotated();
+        }
     }
     if keys.just_pressed(KeyCode::KeyZ) {
         if let Some(state) = history.undo() {
@@ -241,6 +264,15 @@ pub fn handle_editor_input(
     }
     if keys.just_pressed(KeyCode::KeyG) {
         editor.tool = Tool::Generator;
+    }
+    if keys.just_pressed(KeyCode::KeyU) {
+        editor.tool = Tool::Pipe;
+    }
+    if keys.just_pressed(KeyCode::KeyJ) {
+        editor.tool = Tool::Pump;
+    }
+    if keys.just_pressed(KeyCode::KeyK) {
+        editor.tool = Tool::Tank;
     }
     if keys.just_pressed(KeyCode::Escape) {
         editor.tool = Tool::Belt;
@@ -364,6 +396,7 @@ pub fn handle_editor_input(
             }
             Tool::Assembler if free => {
                 let id = sim.0.add_building(tx, ty, editor.dir, BuildingKind::Assembler);
+                sim.0.bld_param[id as usize] = editor.recipe;
                 world.0.set_building(tx, ty, id);
                 changed = true;
             }
@@ -436,6 +469,27 @@ pub fn handle_editor_input(
                 if free {
                     let id = sim.0.add_building(tx, ty, editor.dir, BuildingKind::Generator);
                     sim.0.bld_param[id as usize] = 10; // one generator powers up to 10 consumers
+                    world.0.set_building(tx, ty, id);
+                    changed = true;
+                }
+            }
+            Tool::Pipe => {
+                if free {
+                    let id = sim.0.add_building(tx, ty, editor.dir, BuildingKind::Pipe);
+                    world.0.set_building(tx, ty, id);
+                    changed = true;
+                }
+            }
+            Tool::Pump => {
+                if free {
+                    let id = sim.0.add_building(tx, ty, editor.dir, BuildingKind::Pump);
+                    world.0.set_building(tx, ty, id);
+                    changed = true;
+                }
+            }
+            Tool::Tank => {
+                if free {
+                    let id = sim.0.add_building(tx, ty, editor.dir, BuildingKind::Tank);
                     world.0.set_building(tx, ty, id);
                     changed = true;
                 }

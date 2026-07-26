@@ -30,6 +30,9 @@ pub enum BuildingKind {
     Splitter,
     Pole,
     Generator,
+    Pipe,
+    Pump,
+    Tank,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -129,6 +132,16 @@ pub struct BeltSim {
     pub bld_delivered: Vec<u32>,
     /// Whether this building is receiving enough power this tick.
     pub bld_powered: Vec<bool>,
+    /// Current fluid in this building's fluid box (if any).
+    pub bld_fluid_volume: Vec<f32>,
+    /// Max fluid this building can hold.
+    pub bld_fluid_capacity: Vec<u16>,
+    /// Fluid kind (0 empty/none, 1 water, ...).
+    pub bld_fluid_type: Vec<u8>,
+    /// Network id for connected fluid nodes, or INVALID.
+    pub bld_fluid_network: Vec<u32>,
+    /// True if this assembler's fluid input is satisfied this tick.
+    pub bld_fluid_ready: Vec<bool>,
     pub free_blds: Vec<u32>,
 }
 
@@ -192,6 +205,16 @@ impl BeltSim {
             self.bld_param[i] = 0;
             self.bld_delivered[i] = 0;
             self.bld_powered[i] = false;
+            self.bld_fluid_volume[i] = 0.0;
+            self.bld_fluid_capacity[i] = match kind {
+                BuildingKind::Pipe => 1,
+                BuildingKind::Pump => 1,
+                BuildingKind::Tank => 50,
+                _ => 0,
+            };
+            self.bld_fluid_type[i] = if kind == BuildingKind::Pump { 1 } else { 0 };
+            self.bld_fluid_network[i] = INVALID;
+            self.bld_fluid_ready[i] = false;
             self.bld_chunk[i] = Grid::chunk_key(x, y);
             return id;
         }
@@ -208,6 +231,16 @@ impl BeltSim {
         self.bld_param.push(0);
         self.bld_delivered.push(0);
         self.bld_powered.push(false);
+        self.bld_fluid_volume.push(0.0);
+        self.bld_fluid_capacity.push(match kind {
+            BuildingKind::Pipe => 1,
+            BuildingKind::Pump => 1,
+            BuildingKind::Tank => 50,
+            _ => 0,
+        });
+        self.bld_fluid_type.push(if kind == BuildingKind::Pump { 1 } else { 0 });
+        self.bld_fluid_network.push(INVALID);
+        self.bld_fluid_ready.push(false);
         self.bld_chunk.push(Grid::chunk_key(x, y));
         id
     }
