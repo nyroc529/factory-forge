@@ -3,6 +3,7 @@
 use rand::Rng;
 
 use crate::belts::{BeltSim, BuildingKind, BELT_SPEED, INVALID, KINDS, LANES, MIN_SPACING};
+use crate::economy::RESEARCH_TIERS;
 use crate::grid::Grid;
 
 pub const ITEM_KINDS: u16 = KINDS as u16;
@@ -464,7 +465,14 @@ fn drop_to_building(sim: &mut BeltSim, bld: u32, kind: u16) -> bool {
     let b = bld as usize;
     let k = kind as usize;
     match sim.bld_kind[b] {
-        BuildingKind::Sink => true,
+        BuildingKind::Sink => {
+            if sim.bld_in[b][k] < STORAGE_CAP {
+                sim.bld_in[b][k] += 1;
+                true
+            } else {
+                false
+            }
+        }
         BuildingKind::Source => false,
         BuildingKind::Storage => {
             if sim.bld_in[b][k] < STORAGE_CAP {
@@ -484,10 +492,19 @@ fn drop_to_building(sim: &mut BeltSim, bld: u32, kind: u16) -> bool {
             }
         }
         BuildingKind::Lab => {
-            const SCIENCE: usize = 10;
-            if k == SCIENCE && sim.bld_in[b][SCIENCE] < STORAGE_CAP {
-                sim.bld_in[b][SCIENCE] += 1;
-                true
+            let tier = sim.bld_param[b] as usize;
+            if let Some(cfg) = RESEARCH_TIERS.get(tier) {
+                if cfg.fuel_amount == 0 {
+                    false
+                } else {
+                    let fk = cfg.fuel_kind as usize;
+                    if k == fk && sim.bld_in[b][fk] < STORAGE_CAP {
+                        sim.bld_in[b][fk] += 1;
+                        true
+                    } else {
+                        false
+                    }
+                }
             } else {
                 false
             }
@@ -665,13 +682,20 @@ pub fn tick_buildings(sim: &mut BeltSim, grid: &Grid, active_blds: &[usize]) {
                     sim.bld_timer[s] -= 1;
                     continue;
                 }
-                const SCIENCE: usize = 10;
-                if sim.bld_in[s][SCIENCE] > 0 {
-                    sim.bld_in[s][SCIENCE] -= 1;
-                    if sim.bld_delivered[s] < u32::MAX {
-                        sim.bld_delivered[s] += 1;
+                let tier = sim.bld_param[s] as usize;
+                if let Some(cfg) = RESEARCH_TIERS.get(tier) {
+                    if cfg.fuel_amount == 0 {
+                        // Tier 1: no fuel, just powered, slow steady research.
+                        sim.bld_delivered[s] += cfg.points;
+                        sim.bld_timer[s] = cfg.cooldown;
+                    } else {
+                        let fk = cfg.fuel_kind as usize;
+                        if sim.bld_in[s][fk] >= cfg.fuel_amount {
+                            sim.bld_in[s][fk] -= cfg.fuel_amount;
+                            sim.bld_delivered[s] += cfg.points;
+                            sim.bld_timer[s] = cfg.cooldown;
+                        }
                     }
-                    sim.bld_timer[s] = 6;
                 }
             }
         }
@@ -849,8 +873,10 @@ mod tests {
         let mut sim = BeltSim::default();
         let grid = Grid::new(20, 20);
 
+        // Tier-3 research center consumes science packs.
         let lab = sim.add_building(0, 0, Dir::East, BuildingKind::Lab);
         sim.bld_powered[lab as usize] = true;
+        sim.bld_param[lab as usize] = 2;
         sim.bld_in[lab as usize][10] = 5; // science packs
 
         let active_blds: Vec<usize> = (0..sim.bld_x.len())

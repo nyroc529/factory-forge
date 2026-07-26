@@ -6,6 +6,7 @@ use bevy::prelude::*;
 use crate::belts::{BuildingKind, Dir, INVALID};
 use crate::render::{dir_angle, WorldDirty, TILE};
 use crate::sim::rebuild_belt_graph;
+use crate::economy::{tool_category, tool_info, PlayerState, ToolCategory};
 use crate::{GameWorld, Sim};
 
 /// Inspector / selection-box state.
@@ -131,7 +132,30 @@ pub enum Tool {
     Pipe,
     Pump,
     Tank,
-    Lab,
+    Research1,
+    Research2,
+    Research3,
+}
+
+impl From<BuildingKind> for Tool {
+    fn from(kind: BuildingKind) -> Self {
+        match kind {
+            BuildingKind::Source => Tool::Source,
+            BuildingKind::Sink => Tool::Sink,
+            BuildingKind::Assembler => Tool::Assembler,
+            BuildingKind::Inserter => Tool::Inserter,
+            BuildingKind::Miner => Tool::Miner,
+            BuildingKind::Storage => Tool::Storage,
+            BuildingKind::Shipment => Tool::Shipment,
+            BuildingKind::Splitter => Tool::Splitter,
+            BuildingKind::Pole => Tool::Pole,
+            BuildingKind::Generator => Tool::Generator,
+            BuildingKind::Pipe => Tool::Pipe,
+            BuildingKind::Pump => Tool::Pump,
+            BuildingKind::Tank => Tool::Tank,
+            BuildingKind::Lab => Tool::Research1,
+        }
+    }
 }
 
 #[derive(Resource)]
@@ -174,7 +198,9 @@ impl EditorState {
             Tool::Pipe => "pipe",
             Tool::Pump => "pump",
             Tool::Tank => "tank",
-            Tool::Lab => "lab",
+            Tool::Research1 => "research 1",
+            Tool::Research2 => "research 2",
+            Tool::Research3 => "research 3",
         }
     }
 }
@@ -197,8 +223,27 @@ pub fn tool_color(tool: Tool) -> Color {
         Tool::Pipe => Color::srgb(0.45, 0.45, 0.55),
         Tool::Pump => Color::srgb(0.25, 0.45, 0.65),
         Tool::Tank => Color::srgb(0.45, 0.50, 0.55),
-        Tool::Lab => Color::srgb(0.20, 0.55, 0.45),
+        Tool::Research1 => Color::srgb(0.20, 0.55, 0.45),
+        Tool::Research2 => Color::srgb(0.35, 0.65, 0.50),
+        Tool::Research3 => Color::srgb(0.55, 0.80, 0.60),
     }
+}
+
+pub fn tool_cost(tool: Tool) -> i32 {
+    tool_info(tool).cost.credits
+}
+
+fn try_pay(cost: i32, player: &mut PlayerState) -> bool {
+    if player.credits >= cost {
+        player.credits -= cost;
+        true
+    } else {
+        false
+    }
+}
+
+fn blueprint_cost(blueprint: &Blueprint) -> i32 {
+    blueprint.tiles.iter().map(|t| tool_cost(if t.is_belt { Tool::Belt } else { t.kind.into() })).sum()
 }
 
 pub fn tool_label(tool: Tool) -> &'static str {
@@ -219,7 +264,9 @@ pub fn tool_label(tool: Tool) -> &'static str {
         Tool::Pipe => "pipe",
         Tool::Pump => "pump",
         Tool::Tank => "tank",
-        Tool::Lab => "lab",
+        Tool::Research1 => "rc1",
+        Tool::Research2 => "rc2",
+        Tool::Research3 => "rc3",
     }
 }
 
@@ -279,6 +326,7 @@ pub fn handle_editor_input(
     mut hotbar: ResMut<Hotbar>,
     menu: Res<BuildMenu>,
     ui_interactions: Query<&Interaction>,
+    mut player: ResMut<PlayerState>,
     mut ghost: Query<(&mut Transform, &mut Visibility, &mut Sprite), With<Ghost>>,
 ) {
     fn select_slot(hotbar: &mut Hotbar, editor: &mut EditorState, slot: usize) {
@@ -287,6 +335,7 @@ pub fn handle_editor_input(
             editor.tool = tool;
         }
     }
+    let player = &mut *player;
     let ui_hovered = ui_interactions
         .iter()
         .any(|i| *i != Interaction::None);
@@ -459,7 +508,7 @@ pub fn handle_editor_input(
     if buttons.pressed(MouseButton::Left) {
         match editor.tool {
             Tool::Belt => {
-                if free {
+                if free && try_pay(tool_cost(Tool::Belt), player) {
                     // Auto-turn: while dragging, direction follows the stroke and
                     // the previous belt turns to keep the line connected.
                     if let Some(last) = editor.last_tile {
@@ -477,46 +526,46 @@ pub fn handle_editor_input(
                     changed = true;
                 }
             }
-            Tool::Source if free => {
+            Tool::Source if free && try_pay(tool_cost(Tool::Source), player) => {
                 let id = sim.0.add_building(tx, ty, editor.dir, BuildingKind::Source);
                 world.0.set_building(tx, ty, id);
                 changed = true;
             }
-            Tool::Sink if free => {
+            Tool::Sink if free && try_pay(tool_cost(Tool::Sink), player) => {
                 let id = sim.0.add_building(tx, ty, editor.dir, BuildingKind::Sink);
                 world.0.set_building(tx, ty, id);
                 changed = true;
             }
-            Tool::Assembler if free => {
+            Tool::Assembler if free && try_pay(tool_cost(Tool::Assembler), player) => {
                 let id = sim.0.add_building(tx, ty, editor.dir, BuildingKind::Assembler);
                 sim.0.bld_param[id as usize] = editor.recipe;
                 world.0.set_building(tx, ty, id);
                 changed = true;
             }
-            Tool::Inserter if free => {
+            Tool::Inserter if free && try_pay(tool_cost(Tool::Inserter), player) => {
                 let id = sim.0.add_building(tx, ty, editor.dir, BuildingKind::Inserter);
                 world.0.set_building(tx, ty, id);
                 changed = true;
             }
-            Tool::Miner if free && world.0.ore_at(tx, ty) != 0 => {
+            Tool::Miner if free && world.0.ore_at(tx, ty) != 0 && try_pay(tool_cost(Tool::Miner), player) => {
                 let id = sim.0.add_building(tx, ty, editor.dir, BuildingKind::Miner);
                 world.0.set_building(tx, ty, id);
                 changed = true;
             }
-            Tool::Storage if free => {
+            Tool::Storage if free && try_pay(tool_cost(Tool::Storage), player) => {
                 let id = sim.0.add_building(tx, ty, editor.dir, BuildingKind::Storage);
                 world.0.set_building(tx, ty, id);
                 changed = true;
             }
-            Tool::Shipment if free => {
+            Tool::Shipment if free && try_pay(tool_cost(Tool::Shipment), player) => {
                 let id = sim.0.add_building(tx, ty, editor.dir, BuildingKind::Shipment);
                 // Cycle target item kind with R while placing shipments.
-                sim.0.bld_param[id as usize] = editor.dir as u16;
+                sim.0.bld_param[id as usize] = editor.recipe;
                 sim.0.bld_delivered[id as usize] = 0;
                 world.0.set_building(tx, ty, id);
                 changed = true;
             }
-            Tool::Splitter if free => {
+            Tool::Splitter if free && try_pay(tool_cost(Tool::Splitter), player) => {
                 let id = sim.0.add_building(tx, ty, editor.dir, BuildingKind::Splitter);
                 world.0.set_building(tx, ty, id);
                 changed = true;
@@ -529,7 +578,10 @@ pub fn handle_editor_input(
                 }
             }
             Tool::Paste => {
-                if buttons.just_pressed(MouseButton::Left) && paste_valid {
+                if buttons.just_pressed(MouseButton::Left)
+                    && paste_valid
+                    && try_pay(blueprint_cost(&blueprint), player)
+                {
                     for t in &blueprint.tiles {
                         let x = tx + t.dx;
                         let y = ty + t.dy;
@@ -552,14 +604,14 @@ pub fn handle_editor_input(
                 }
             }
             Tool::Pole => {
-                if free {
+                if free && try_pay(tool_cost(Tool::Pole), player) {
                     let id = sim.0.add_building(tx, ty, editor.dir, BuildingKind::Pole);
                     world.0.set_building(tx, ty, id);
                     changed = true;
                 }
             }
             Tool::Generator => {
-                if free {
+                if free && try_pay(tool_cost(Tool::Generator), player) {
                     let id = sim.0.add_building(tx, ty, editor.dir, BuildingKind::Generator);
                     sim.0.bld_param[id as usize] = 10; // one generator powers up to 10 consumers
                     world.0.set_building(tx, ty, id);
@@ -567,31 +619,41 @@ pub fn handle_editor_input(
                 }
             }
             Tool::Pipe => {
-                if free {
+                if free && try_pay(tool_cost(Tool::Pipe), player) {
                     let id = sim.0.add_building(tx, ty, editor.dir, BuildingKind::Pipe);
                     world.0.set_building(tx, ty, id);
                     changed = true;
                 }
             }
             Tool::Pump => {
-                if free {
+                if free && try_pay(tool_cost(Tool::Pump), player) {
                     let id = sim.0.add_building(tx, ty, editor.dir, BuildingKind::Pump);
                     world.0.set_building(tx, ty, id);
                     changed = true;
                 }
             }
             Tool::Tank => {
-                if free {
+                if free && try_pay(tool_cost(Tool::Tank), player) {
                     let id = sim.0.add_building(tx, ty, editor.dir, BuildingKind::Tank);
                     world.0.set_building(tx, ty, id);
                     changed = true;
                 }
             }
-            Tool::Lab => {
+            Tool::Research1 | Tool::Research2 | Tool::Research3 => {
                 if free {
-                    let id = sim.0.add_building(tx, ty, editor.dir, BuildingKind::Lab);
-                    world.0.set_building(tx, ty, id);
-                    changed = true;
+                    let cost = tool_cost(editor.tool);
+                    if try_pay(cost, player) {
+                        let id = sim.0.add_building(tx, ty, editor.dir, BuildingKind::Lab);
+                        let tier = match editor.tool {
+                            Tool::Research1 => 0,
+                            Tool::Research2 => 1,
+                            Tool::Research3 => 2,
+                            _ => 0,
+                        };
+                        sim.0.bld_param[id as usize] = tier;
+                        world.0.set_building(tx, ty, id);
+                        changed = true;
+                    }
                 }
             }
             _ => {}
@@ -790,22 +852,28 @@ pub fn update_hotbar(
         }
         // Highlight selected slot.
         if slot.0 == hotbar.selected {
-            let c: Color = (*bg).0.into();
-            *bg = c.mix(&Color::WHITE, 0.4).into();
+            *bg = bg.0.mix(&Color::WHITE, 0.4).into();
         }
     }
 }
 
-fn menu_button(parent: &mut ChildBuilder, tool: Tool) {
-    let color = tool_color(tool);
+fn menu_button(parent: &mut ChildBuilder, tool: Tool, player: &PlayerState) {
+    let info = tool_info(tool);
+    let affordable = player.credits >= info.cost.credits;
+    let mut color = tool_color(tool);
+    if !affordable {
+        color = color.with_alpha(0.35);
+    }
     parent
         .spawn((
             ButtonBundle {
                 style: Style {
-                    width: Val::Px(80.0),
-                    height: Val::Px(80.0),
+                    width: Val::Px(130.0),
+                    height: Val::Px(110.0),
                     margin: UiRect::all(Val::Px(4.0)),
-                    justify_content: JustifyContent::Center,
+                    padding: UiRect::all(Val::Px(4.0)),
+                    flex_direction: FlexDirection::Column,
+                    justify_content: JustifyContent::FlexStart,
                     align_items: AlignItems::Center,
                     ..default()
                 },
@@ -816,17 +884,42 @@ fn menu_button(parent: &mut ChildBuilder, tool: Tool) {
         ))
         .with_children(|p| {
             p.spawn(TextBundle::from_section(
-                tool_label(tool),
+                info.name,
                 TextStyle {
-                    font_size: 12.0,
+                    font_size: 11.0,
                     color: Color::srgb(0.95, 0.95, 0.95),
+                    ..default()
+                },
+            ));
+            p.spawn(TextBundle::from_section(
+                format!("${}", info.cost.credits),
+                TextStyle {
+                    font_size: 10.0,
+                    color: if affordable {
+                        Color::srgb(0.85, 0.95, 0.7)
+                    } else {
+                        Color::srgb(0.95, 0.5, 0.5)
+                    },
+                    ..default()
+                },
+            ));
+            p.spawn(TextBundle::from_section(
+                info.description,
+                TextStyle {
+                    font_size: 8.0,
+                    color: Color::srgb(0.82, 0.86, 0.92),
                     ..default()
                 },
             ));
         });
 }
 
-fn menu_category(parent: &mut ChildBuilder, title: &str, tools: &[Tool]) {
+fn menu_category(
+    parent: &mut ChildBuilder,
+    category: ToolCategory,
+    tools: &[Tool],
+    player: &PlayerState,
+) {
     parent
         .spawn(NodeBundle {
             style: Style {
@@ -839,7 +932,7 @@ fn menu_category(parent: &mut ChildBuilder, title: &str, tools: &[Tool]) {
         })
         .with_children(|p| {
             p.spawn(TextBundle::from_section(
-                title,
+                category.name(),
                 TextStyle {
                     font_size: 14.0,
                     color: Color::srgb(0.8, 0.85, 0.92),
@@ -855,17 +948,60 @@ fn menu_category(parent: &mut ChildBuilder, title: &str, tools: &[Tool]) {
             })
             .with_children(|row| {
                 for &tool in tools {
-                    menu_button(row, tool);
+                    menu_button(row, tool, player);
                 }
             });
         });
 }
 
-pub fn open_build_menu(mut commands: Commands, hotbar: Res<Hotbar>) {
+fn collect_by_category(tools: &[Tool]) -> Vec<(ToolCategory, Vec<Tool>)> {
+    let mut groups: Vec<(ToolCategory, Vec<Tool>)> = vec![
+        (ToolCategory::Logistics, vec![]),
+        (ToolCategory::Production, vec![]),
+        (ToolCategory::PowerFluids, vec![]),
+        (ToolCategory::Tools, vec![]),
+    ];
+    for &tool in tools {
+        let cat = tool_category(tool);
+        if let Some(g) = groups.iter_mut().find(|(c, _)| *c == cat) {
+            g.1.push(tool);
+        }
+    }
+    groups.retain(|(_, v)| !v.is_empty());
+    groups
+}
+
+pub fn open_build_menu(
+    mut commands: Commands,
+    hotbar: &Hotbar,
+    player: &PlayerState,
+) {
     let selected_label = hotbar
         .slots[hotbar.selected]
         .map(tool_label)
         .unwrap_or("empty");
+    const ALL_TOOLS: &[Tool] = &[
+        Tool::Select,
+        Tool::Paste,
+        Tool::Belt,
+        Tool::Inserter,
+        Tool::Splitter,
+        Tool::Source,
+        Tool::Sink,
+        Tool::Assembler,
+        Tool::Miner,
+        Tool::Storage,
+        Tool::Shipment,
+        Tool::Pole,
+        Tool::Generator,
+        Tool::Pipe,
+        Tool::Pump,
+        Tool::Tank,
+        Tool::Research1,
+        Tool::Research2,
+        Tool::Research3,
+    ];
+    let groups = collect_by_category(ALL_TOOLS);
     commands
         .spawn((
             NodeBundle {
@@ -904,10 +1040,9 @@ pub fn open_build_menu(mut commands: Commands, hotbar: Res<Hotbar>) {
                 ..default()
             })
             .with_children(|body| {
-                menu_category(body, "Logistics", &[Tool::Belt, Tool::Inserter, Tool::Splitter]);
-                menu_category(body, "Production", &[Tool::Miner, Tool::Assembler, Tool::Source, Tool::Sink, Tool::Storage, Tool::Shipment]);
-                menu_category(body, "Power & Fluids", &[Tool::Pole, Tool::Generator, Tool::Pipe, Tool::Pump, Tool::Tank, Tool::Lab]);
-                menu_category(body, "Tools", &[Tool::Select, Tool::Paste]);
+                for (cat, tools) in groups {
+                    menu_category(body, cat, &tools, &player);
+                }
             });
         });
 }
@@ -918,6 +1053,7 @@ pub fn handle_menu_input(
     mut commands: Commands,
     root: Query<Entity, With<MenuRoot>>,
     hotbar: Res<Hotbar>,
+    player: Res<PlayerState>,
 ) {
     let toggle = keys.just_pressed(KeyCode::KeyQ) || keys.just_pressed(KeyCode::Tab);
     let close = keys.just_pressed(KeyCode::Escape);
@@ -933,7 +1069,7 @@ pub fn handle_menu_input(
         commands.entity(e).despawn_recursive();
     }
     if menu.visible {
-        open_build_menu(commands, hotbar);
+        open_build_menu(commands, &hotbar, &player);
     }
 }
 
@@ -944,9 +1080,14 @@ pub fn handle_menu_clicks(
     mut menu: ResMut<BuildMenu>,
     mut commands: Commands,
     root: Query<Entity, With<MenuRoot>>,
+    player: Res<PlayerState>,
 ) {
     for (interaction, item) in interactions.iter_mut() {
         if *interaction == Interaction::Pressed {
+            let info = tool_info(item.0);
+            if player.credits < info.cost.credits {
+                continue;
+            }
             let slot = hotbar.selected;
             hotbar.slots[slot] = Some(item.0);
             editor.tool = item.0;

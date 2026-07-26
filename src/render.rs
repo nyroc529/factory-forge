@@ -15,6 +15,7 @@ use bevy::render::view::NoFrustumCulling;
 use bevy::sprite::{MaterialMesh2dBundle, Mesh2dHandle};
 
 use crate::belts::{BeltSim, BuildingKind, Dir, INVALID, ITEM_NAMES};
+use crate::economy::PlayerState;
 use crate::sim::{INSERTER_COOLDOWN, RECIPES, is_consumer, is_power_node, POWER_RADIUS2};
 use crate::ui::{Blueprint, EditorState, Selection};
 use crate::{GameWorld, Sim};
@@ -678,6 +679,7 @@ pub fn update_hud(
     selection: Res<Selection>,
     blueprint: Res<Blueprint>,
     diagnostics: Res<DiagnosticsStore>,
+    player: Res<PlayerState>,
     mut q: Query<&mut Text, With<Hud>>,
     mut counter: Local<u32>,
 ) {
@@ -754,7 +756,9 @@ pub fn update_hud(
     };
     if let Ok(mut text) = q.get_single_mut() {
         text.sections[0].value = format!(
-            "items: {}   fps: {:.0}   tool: {} ({:?}){}\n{}",
+            "credits: ${}  research: {}  items: {}  fps: {:.0}  tool: {} ({:?}){}\n{}",
+            player.credits,
+            player.research_points,
             sim.0.active_item_count(),
             fps,
             editor.tool_name(),

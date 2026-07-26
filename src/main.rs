@@ -1,4 +1,5 @@
 mod belts;
+mod economy;
 mod grid;
 mod render;
 mod sim;
@@ -10,7 +11,8 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::collections::HashSet;
 
-use belts::{BeltSim, Dir};
+use belts::{BeltSim, BuildingKind, Dir, KINDS};
+use economy::{item_value, PlayerState};
 use grid::{Grid, CHUNK_SIZE};
 use render::{CameraTarget, TILE};
 
@@ -43,6 +45,7 @@ fn main() {
         .insert_resource(Sim(sim))
         .insert_resource(GameWorld(grid))
         .insert_resource(history)
+        .insert_resource(economy::PlayerState::with_starting_funds())
         .init_resource::<ui::EditorState>()
         .init_resource::<ui::Selection>()
         .init_resource::<ui::Blueprint>()
@@ -74,6 +77,7 @@ fn run_sim(
     mut sim: ResMut<Sim>,
     world: Res<GameWorld>,
     target: Res<CameraTarget>,
+    mut player: ResMut<PlayerState>,
     mut active_chunks: Local<HashSet<(i32, i32)>>,
     mut active_belts: Local<Vec<usize>>,
     mut active_blds: Local<Vec<usize>>,
@@ -129,6 +133,38 @@ fn run_sim(
     );
     sim::tick_buildings(&mut sim.0, &world.0, &active_blds);
     sim::tick(&mut sim.0, &active_belts);
+
+    // Economy: sinks sell stored items, shipments pay for target deliveries,
+    // and research centers convert consumed fuel into research points.
+    for &s in active_blds.iter() {
+        match sim.0.bld_kind[s] {
+            BuildingKind::Sink => {
+                for k in 0..KINDS {
+                    let n = sim.0.bld_in[s][k];
+                    if n > 0 {
+                        player.credits += n as i32 * item_value(k as u16);
+                        sim.0.bld_in[s][k] = 0;
+                    }
+                }
+            }
+            BuildingKind::Shipment => {
+                let target = sim.0.bld_param[s] as usize;
+                let delivered = sim.0.bld_delivered[s];
+                if delivered > 0 && target < KINDS {
+                    player.credits += delivered as i32 * item_value(target as u16);
+                    sim.0.bld_delivered[s] = 0;
+                }
+            }
+            BuildingKind::Lab => {
+                let points = sim.0.bld_delivered[s];
+                if points > 0 {
+                    player.research_points += points as i32;
+                    sim.0.bld_delivered[s] = 0;
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Generate a deterministic world with ore patches and a starter factory
