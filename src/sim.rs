@@ -793,6 +793,83 @@ mod tests {
             "tank should be empty without power"
         );
     }
+
+    #[test]
+    fn plastic_recipe_crafts() {
+        let mut sim = BeltSim::default();
+        let grid = Grid::new(20, 20);
+
+        let asm = sim.add_building(0, 0, Dir::East, BuildingKind::Assembler);
+        sim.bld_powered[asm as usize] = true;
+        let recipe_idx = RECIPES.iter().position(|r| r.name == "plastic").unwrap();
+        sim.bld_param[asm as usize] = recipe_idx as u16;
+        sim.bld_in[asm as usize][2] = 1; // coal
+        sim.bld_in[asm as usize][6] = 2; // oil
+
+        let active_blds: Vec<usize> = (0..sim.bld_x.len())
+            .filter(|&s| sim.bld_active[s])
+            .collect();
+
+        for _ in 0..130 {
+            tick_buildings(&mut sim, &grid, &active_blds);
+        }
+
+        assert!(sim.bld_out[asm as usize][7] > 0, "assembler should produce plastic");
+    }
+
+    #[test]
+    fn science_pack_recipe_crafts() {
+        let mut sim = BeltSim::default();
+        let grid = Grid::new(20, 20);
+
+        let asm = sim.add_building(0, 0, Dir::East, BuildingKind::Assembler);
+        sim.bld_powered[asm as usize] = true;
+        let recipe_idx = RECIPES.iter().position(|r| r.name == "science pack").unwrap();
+        sim.bld_param[asm as usize] = recipe_idx as u16;
+        sim.bld_in[asm as usize][4] = 1; // steel
+        sim.bld_in[asm as usize][7] = 1; // plastic
+        sim.bld_in[asm as usize][8] = 1; // circuit
+
+        let active_blds: Vec<usize> = (0..sim.bld_x.len())
+            .filter(|&s| sim.bld_active[s])
+            .collect();
+
+        for _ in 0..220 {
+            tick_buildings(&mut sim, &grid, &active_blds);
+        }
+
+        assert!(
+            sim.bld_out[asm as usize][10] > 0,
+            "assembler should produce science packs"
+        );
+    }
+
+    #[test]
+    fn lab_consumes_science_packs() {
+        let mut sim = BeltSim::default();
+        let grid = Grid::new(20, 20);
+
+        let lab = sim.add_building(0, 0, Dir::East, BuildingKind::Lab);
+        sim.bld_powered[lab as usize] = true;
+        sim.bld_in[lab as usize][10] = 5; // science packs
+
+        let active_blds: Vec<usize> = (0..sim.bld_x.len())
+            .filter(|&s| sim.bld_active[s])
+            .collect();
+
+        for _ in 0..50 {
+            tick_buildings(&mut sim, &grid, &active_blds);
+        }
+
+        assert!(
+            sim.bld_delivered[lab as usize] > 0,
+            "lab should consume science packs for research"
+        );
+        assert!(
+            sim.bld_in[lab as usize][10] < 5,
+            "lab should have consumed at least one science pack"
+        );
+    }
 }
 
 /// Pass 1: move every item forward, clamped behind the item ahead.
