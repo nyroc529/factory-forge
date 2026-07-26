@@ -1,6 +1,7 @@
 mod belts;
 mod economy;
 mod grid;
+mod rail;
 mod render;
 mod sim;
 mod ui;
@@ -12,7 +13,7 @@ use rand::{Rng, SeedableRng};
 use std::collections::HashSet;
 
 use belts::{BeltSim, BuildingKind, Dir, KINDS};
-use economy::{item_value, PlayerState};
+use economy::{item_value, shipment_value, PlayerState};
 use grid::{Grid, CHUNK_SIZE};
 use render::{CameraTarget, TILE};
 
@@ -51,6 +52,8 @@ fn main() {
         .init_resource::<ui::Blueprint>()
         .init_resource::<ui::Hotbar>()
         .init_resource::<ui::BuildMenu>()
+        .init_resource::<rail::RailNetwork>()
+        .init_resource::<rail::TrainEntities>()
         .add_systems(Startup, (render::setup_scene, ui::setup_ghost, ui::setup_hotbar))
         .add_systems(FixedUpdate, run_sim)
         .add_systems(
@@ -58,6 +61,7 @@ fn main() {
             (
                 ui::handle_menu_input,
                 ui::handle_menu_clicks,
+                ui::handle_menu_unlocks,
                 ui::handle_hotbar_clicks,
                 ui::handle_editor_input,
                 ui::save_load,
@@ -67,6 +71,7 @@ fn main() {
                 render::camera_control,
                 render::toggle_bloom,
                 render::update_hud,
+                rail::update_train_visuals,
             )
                 .chain(),
         )
@@ -77,6 +82,7 @@ fn run_sim(
     mut sim: ResMut<Sim>,
     world: Res<GameWorld>,
     target: Res<CameraTarget>,
+    mut rail: ResMut<rail::RailNetwork>,
     mut player: ResMut<PlayerState>,
     mut active_chunks: Local<HashSet<(i32, i32)>>,
     mut active_belts: Local<Vec<usize>>,
@@ -134,6 +140,12 @@ fn run_sim(
     sim::tick_buildings(&mut sim.0, &world.0, &active_blds);
     sim::tick(&mut sim.0, &active_belts);
 
+    if sim.0.dirty_rail {
+        rail.rebuild(&sim.0, &active_blds);
+        sim.0.dirty_rail = false;
+    }
+    rail.tick_trains(&mut sim.0);
+
     // Economy: sinks sell stored items, shipments pay for target deliveries,
     // and research centers convert consumed fuel into research points.
     for &s in active_blds.iter() {
@@ -151,7 +163,7 @@ fn run_sim(
                 let target = sim.0.bld_param[s] as usize;
                 let delivered = sim.0.bld_delivered[s];
                 if delivered > 0 && target < KINDS {
-                    player.credits += delivered as i32 * item_value(target as u16);
+                    player.credits += delivered as i32 * shipment_value(target as u16);
                     sim.0.bld_delivered[s] = 0;
                 }
             }

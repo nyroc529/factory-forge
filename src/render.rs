@@ -330,6 +330,7 @@ pub fn rebuild_static_mesh(
             BuildingKind::Inserter => TILE * 0.32,
             BuildingKind::Pipe | BuildingKind::Pump => TILE * 0.22,
             BuildingKind::Tank => TILE * 0.45,
+            BuildingKind::RailTrack => TILE * 0.15,
             _ => TILE * 0.45,
         };
         // Dark outline makes buildings pop off the belts/ore.
@@ -349,6 +350,9 @@ pub fn rebuild_static_mesh(
             BuildingKind::Pump => lin(Color::srgb(0.25, 0.45, 0.65)),
             BuildingKind::Tank => lin(Color::srgb(0.45, 0.50, 0.55)),
             BuildingKind::Lab => lin(Color::srgb(0.20, 0.55, 0.45)),
+            BuildingKind::RailTrack => lin(Color::srgb(0.25, 0.25, 0.28)),
+            BuildingKind::RailStation => lin(Color::srgb(0.45, 0.35, 0.25)),
+            BuildingKind::Turret => lin(Color::srgb(0.65, 0.25, 0.25)),
         };
         batch.quad(c, half, half, 0.0, body);
         // Direction notch on the output/input edge.

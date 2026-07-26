@@ -129,6 +129,7 @@ pub fn is_consumer(kind: BuildingKind) -> bool {
             | BuildingKind::Splitter
             | BuildingKind::Pump
             | BuildingKind::Lab
+            | BuildingKind::RailStation
     )
 }
 
@@ -145,6 +146,7 @@ pub fn is_power_node(kind: BuildingKind) -> bool {
             | BuildingKind::Shipment
             | BuildingKind::Splitter
             | BuildingKind::Pump
+            | BuildingKind::RailStation
     )
 }
 
@@ -444,14 +446,14 @@ fn pick_from_belt(sim: &mut BeltSim, belt: u32) -> Option<u16> {
 /// Pick any one item from a storage/assembler output inventory behind an inserter.
 fn pick_from_building(sim: &mut BeltSim, bld: u32) -> Option<u16> {
     let b = bld as usize;
-    // Prefer output buffer, then storage.
+    // Prefer output buffer, then storage / station inventory.
     if sim.bld_kind[b] == BuildingKind::Assembler || sim.bld_kind[b] == BuildingKind::Storage {
         if let Some(k) = (0..KINDS).find(|&k| sim.bld_out[b][k] > 0) {
             sim.bld_out[b][k] -= 1;
             return Some(k as u16);
         }
     }
-    if sim.bld_kind[b] == BuildingKind::Storage {
+    if sim.bld_kind[b] == BuildingKind::Storage || sim.bld_kind[b] == BuildingKind::RailStation {
         if let Some(k) = (0..KINDS).find(|&k| sim.bld_in[b][k] > 0) {
             sim.bld_in[b][k] -= 1;
             return Some(k as u16);
@@ -474,7 +476,7 @@ fn drop_to_building(sim: &mut BeltSim, bld: u32, kind: u16) -> bool {
             }
         }
         BuildingKind::Source => false,
-        BuildingKind::Storage => {
+        BuildingKind::Storage | BuildingKind::RailStation => {
             if sim.bld_in[b][k] < STORAGE_CAP {
                 sim.bld_in[b][k] += 1;
                 true
@@ -571,6 +573,7 @@ pub fn tick_buildings(sim: &mut BeltSim, grid: &Grid, active_blds: &[usize]) {
             }
             BuildingKind::Storage => {}
             BuildingKind::Shipment => {}
+            BuildingKind::RailTrack | BuildingKind::RailStation | BuildingKind::Turret => {}
             BuildingKind::Splitter => {
                 if sim.bld_timer[s] > 0 {
                     sim.bld_timer[s] -= 1;

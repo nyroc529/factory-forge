@@ -10,6 +10,7 @@ use crate::belts::KINDS;
 pub struct PlayerState {
     pub credits: i32,
     pub research_points: i32,
+    pub tech_flags: u64,
 }
 
 impl PlayerState {
@@ -17,6 +18,7 @@ impl PlayerState {
         Self {
             credits: 500,
             research_points: 0,
+            tech_flags: 0,
         }
     }
 }
@@ -58,7 +60,7 @@ const INFO_PASTE: ToolInfo = ToolInfo {
 const INFO_BELT: ToolInfo = ToolInfo {
     name: "Transport Belt",
     description: "Moves items in two lanes.",
-    cost: Cost { credits: 5 },
+    cost: Cost { credits: 3 },
 };
 const INFO_INSERTER: ToolInfo = ToolInfo {
     name: "Inserter",
@@ -73,22 +75,22 @@ const INFO_SPLITTER: ToolInfo = ToolInfo {
 const INFO_SOURCE: ToolInfo = ToolInfo {
     name: "Source",
     description: "Generates random raw resources.",
-    cost: Cost { credits: 50 },
+    cost: Cost { credits: 100 },
 };
 const INFO_SINK: ToolInfo = ToolInfo {
     name: "Sink",
     description: "Consumes any item and sells it for credits.",
-    cost: Cost { credits: 20 },
+    cost: Cost { credits: 40 },
 };
 const INFO_ASSEMBLER: ToolInfo = ToolInfo {
     name: "Assembler",
     description: "Crafts recipes from inputs.",
-    cost: Cost { credits: 80 },
+    cost: Cost { credits: 120 },
 };
 const INFO_MINER: ToolInfo = ToolInfo {
     name: "Miner",
     description: "Extracts ore from the tile underneath.",
-    cost: Cost { credits: 60 },
+    cost: Cost { credits: 80 },
 };
 const INFO_STORAGE: ToolInfo = ToolInfo {
     name: "Storage",
@@ -97,8 +99,8 @@ const INFO_STORAGE: ToolInfo = ToolInfo {
 };
 const INFO_SHIPMENT: ToolInfo = ToolInfo {
     name: "Shipment",
-    description: "Pays a bonus for a specific target item.",
-    cost: Cost { credits: 40 },
+    description: "Pays a 1.5x bonus for a specific target item.",
+    cost: Cost { credits: 60 },
 };
 const INFO_POLE: ToolInfo = ToolInfo {
     name: "Power Pole",
@@ -108,17 +110,17 @@ const INFO_POLE: ToolInfo = ToolInfo {
 const INFO_GENERATOR: ToolInfo = ToolInfo {
     name: "Generator",
     description: "Powers nearby consumers and poles.",
-    cost: Cost { credits: 120 },
+    cost: Cost { credits: 200 },
 };
 const INFO_PIPE: ToolInfo = ToolInfo {
     name: "Pipe",
     description: "Carries fluids between buildings.",
-    cost: Cost { credits: 8 },
+    cost: Cost { credits: 5 },
 };
 const INFO_PUMP: ToolInfo = ToolInfo {
     name: "Pump",
     description: "Pumps groundwater into pipes.",
-    cost: Cost { credits: 70 },
+    cost: Cost { credits: 120 },
 };
 const INFO_TANK: ToolInfo = ToolInfo {
     name: "Fluid Tank",
@@ -128,35 +130,55 @@ const INFO_TANK: ToolInfo = ToolInfo {
 const INFO_RESEARCH1: ToolInfo = ToolInfo {
     name: "Research Center T1",
     description: "Produces research points slowly when powered.",
-    cost: Cost { credits: 200 },
+    cost: Cost { credits: 250 },
 };
 const INFO_RESEARCH2: ToolInfo = ToolInfo {
     name: "Research Center T2",
     description: "Consumes circuits to produce research points faster.",
-    cost: Cost { credits: 500 },
+    cost: Cost { credits: 700 },
 };
 const INFO_RESEARCH3: ToolInfo = ToolInfo {
     name: "Research Center T3",
     description: "Consumes science packs for the highest research throughput.",
-    cost: Cost { credits: 1200 },
+    cost: Cost { credits: 1800 },
+};
+const INFO_RAILTRACK: ToolInfo = ToolInfo {
+    name: "Rail Track",
+    description: "Connects rail stations into a logistics network.",
+    cost: Cost { credits: 15 },
+};
+const INFO_RAILSTATION: ToolInfo = ToolInfo {
+    name: "Rail Station",
+    description: "Loads and unloads cargo for trains on the same network.",
+    cost: Cost { credits: 120 },
+};
+const INFO_TURRET: ToolInfo = ToolInfo {
+    name: "Turret",
+    description: "Automatically targets enemies within range.",
+    cost: Cost { credits: 250 },
 };
 
 /// How much money the player receives for shipping one of an item kind.
 pub const fn item_value(kind: u16) -> i32 {
     match kind {
-        0 => 2,   // iron
-        1 => 2,   // copper
-        2 => 2,   // coal
-        3 => 5,   // gear
-        4 => 8,   // steel
-        5 => 1,   // stone
-        6 => 3,   // oil
-        7 => 10,  // plastic
-        8 => 25,  // circuit
-        9 => 4,   // brick
-        10 => 50, // science
+        0 => 3,    // iron
+        1 => 3,    // copper
+        2 => 2,    // coal
+        3 => 10,   // gear
+        4 => 18,   // steel
+        5 => 1,    // stone
+        6 => 4,    // oil
+        7 => 20,   // plastic
+        8 => 80,   // circuit
+        9 => 6,    // brick
+        10 => 250, // science
         _ => 1,
     }
+}
+
+/// Payout for a shipment delivery (bonus over normal item value).
+pub const fn shipment_value(kind: u16) -> i32 {
+    item_value(kind) + item_value(kind) / 2
 }
 
 /// Human-readable item names for economy UI.
@@ -186,6 +208,9 @@ pub fn tool_info(tool: Tool) -> &'static ToolInfo {
         Tool::Research1 => &INFO_RESEARCH1,
         Tool::Research2 => &INFO_RESEARCH2,
         Tool::Research3 => &INFO_RESEARCH3,
+        Tool::RailTrack => &INFO_RAILTRACK,
+        Tool::RailStation => &INFO_RAILSTATION,
+        Tool::Turret => &INFO_TURRET,
     }
 }
 
@@ -194,6 +219,8 @@ pub enum ToolCategory {
     Logistics,
     Production,
     PowerFluids,
+    Rail,
+    Combat,
     Tools,
 }
 
@@ -203,6 +230,8 @@ impl ToolCategory {
             ToolCategory::Logistics => "Logistics",
             ToolCategory::Production => "Production",
             ToolCategory::PowerFluids => "Power & Fluids",
+            ToolCategory::Rail => "Rail",
+            ToolCategory::Combat => "Combat",
             ToolCategory::Tools => "Tools",
         }
     }
@@ -221,6 +250,8 @@ pub fn tool_category(tool: Tool) -> ToolCategory {
             ToolCategory::PowerFluids
         }
         Tool::Research1 | Tool::Research2 | Tool::Research3 => ToolCategory::Production,
+        Tool::RailTrack | Tool::RailStation => ToolCategory::Rail,
+        Tool::Turret => ToolCategory::Combat,
         Tool::Select | Tool::Paste => ToolCategory::Tools,
     }
 }
@@ -257,3 +288,90 @@ pub const RESEARCH_TIERS: [ResearchTier; 3] = [
         cooldown: 15,
     },
 ];
+
+/// Technologies that can be unlocked by spending research points.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Tech {
+    Splitter,
+    Shipment,
+    PowerFluids,
+    AdvancedResearch,
+    RailLogistics,
+    Combat,
+}
+
+impl Tech {
+    pub const fn idx(self) -> u32 {
+        match self {
+            Tech::Splitter => 0,
+            Tech::Shipment => 1,
+            Tech::PowerFluids => 2,
+            Tech::AdvancedResearch => 3,
+            Tech::RailLogistics => 4,
+            Tech::Combat => 5,
+        }
+    }
+
+    pub const fn cost(self) -> i32 {
+        match self {
+            Tech::Splitter => 50,
+            Tech::Shipment => 100,
+            Tech::PowerFluids => 150,
+            Tech::AdvancedResearch => 300,
+            Tech::RailLogistics => 500,
+            Tech::Combat => 400,
+        }
+    }
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Tech::Splitter => "Fast Logistics",
+            Tech::Shipment => "Shipment Contracts",
+            Tech::PowerFluids => "Power & Fluids",
+            Tech::AdvancedResearch => "Advanced Research",
+            Tech::RailLogistics => "Rail Logistics",
+            Tech::Combat => "Defensive Systems",
+        }
+    }
+
+    pub const fn description(self) -> &'static str {
+        match self {
+            Tech::Splitter => "Unlocks splitters for belt distribution.",
+            Tech::Shipment => "Unlocks shipments that pay a premium for target items.",
+            Tech::PowerFluids => "Unlocks generators, pumps, and tanks.",
+            Tech::AdvancedResearch => "Unlocks Research Center T2 and T3.",
+            Tech::RailLogistics => "Unlocks rail tracks and train stations.",
+            Tech::Combat => "Unlocks turrets for base defense.",
+        }
+    }
+}
+
+/// Which technology gates a given tool. Basic tools return `None`.
+pub const fn tech_for_tool(tool: Tool) -> Option<Tech> {
+    match tool {
+        Tool::Splitter => Some(Tech::Splitter),
+        Tool::Shipment => Some(Tech::Shipment),
+        Tool::Generator | Tool::Pump | Tool::Tank => Some(Tech::PowerFluids),
+        Tool::Research2 | Tool::Research3 => Some(Tech::AdvancedResearch),
+        Tool::RailTrack | Tool::RailStation => Some(Tech::RailLogistics),
+        Tool::Turret => Some(Tech::Combat),
+        Tool::Select | Tool::Paste | Tool::Belt | Tool::Inserter | Tool::Source | Tool::Sink
+        | Tool::Assembler | Tool::Miner | Tool::Storage | Tool::Pole | Tool::Pipe
+        | Tool::Research1 => None,
+    }
+}
+
+pub fn is_tech_unlocked(flags: u64, tech: Tech) -> bool {
+    flags & (1u64 << tech.idx()) != 0
+}
+
+pub fn unlock_tech(flags: &mut u64, tech: Tech) {
+    *flags |= 1u64 << tech.idx();
+}
+
+pub fn is_tool_unlocked(tool: Tool, flags: u64) -> bool {
+    match tech_for_tool(tool) {
+        Some(t) => is_tech_unlocked(flags, t),
+        None => true,
+    }
+}

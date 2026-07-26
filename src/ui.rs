@@ -6,7 +6,10 @@ use bevy::prelude::*;
 use crate::belts::{BuildingKind, Dir, INVALID};
 use crate::render::{dir_angle, WorldDirty, TILE};
 use crate::sim::rebuild_belt_graph;
-use crate::economy::{tool_category, tool_info, PlayerState, ToolCategory};
+use crate::economy::{
+    is_tool_unlocked, tech_for_tool, tool_category, tool_info, unlock_tech, PlayerState, Tech,
+    ToolCategory,
+};
 use crate::{GameWorld, Sim};
 
 /// Inspector / selection-box state.
@@ -55,6 +58,9 @@ pub struct HotbarSlot(pub usize);
 
 #[derive(Component)]
 pub struct MenuItem(pub Tool);
+
+#[derive(Component)]
+pub struct MenuUnlock(pub Tech);
 
 #[derive(Component)]
 pub struct MenuRoot;
@@ -135,6 +141,9 @@ pub enum Tool {
     Research1,
     Research2,
     Research3,
+    RailTrack,
+    RailStation,
+    Turret,
 }
 
 impl From<BuildingKind> for Tool {
@@ -154,6 +163,9 @@ impl From<BuildingKind> for Tool {
             BuildingKind::Pump => Tool::Pump,
             BuildingKind::Tank => Tool::Tank,
             BuildingKind::Lab => Tool::Research1,
+            BuildingKind::RailTrack => Tool::RailTrack,
+            BuildingKind::RailStation => Tool::RailStation,
+            BuildingKind::Turret => Tool::Turret,
         }
     }
 }
@@ -201,6 +213,9 @@ impl EditorState {
             Tool::Research1 => "research 1",
             Tool::Research2 => "research 2",
             Tool::Research3 => "research 3",
+            Tool::RailTrack => "rail track",
+            Tool::RailStation => "rail station",
+            Tool::Turret => "turret",
         }
     }
 }
@@ -226,6 +241,9 @@ pub fn tool_color(tool: Tool) -> Color {
         Tool::Research1 => Color::srgb(0.20, 0.55, 0.45),
         Tool::Research2 => Color::srgb(0.35, 0.65, 0.50),
         Tool::Research3 => Color::srgb(0.55, 0.80, 0.60),
+        Tool::RailTrack => Color::srgb(0.25, 0.25, 0.28),
+        Tool::RailStation => Color::srgb(0.45, 0.35, 0.25),
+        Tool::Turret => Color::srgb(0.65, 0.25, 0.25),
     }
 }
 
@@ -267,6 +285,9 @@ pub fn tool_label(tool: Tool) -> &'static str {
         Tool::Research1 => "rc1",
         Tool::Research2 => "rc2",
         Tool::Research3 => "rc3",
+        Tool::RailTrack => "rail",
+        Tool::RailStation => "station",
+        Tool::Turret => "turret",
     }
 }
 
@@ -329,45 +350,48 @@ pub fn handle_editor_input(
     mut player: ResMut<PlayerState>,
     mut ghost: Query<(&mut Transform, &mut Visibility, &mut Sprite), With<Ghost>>,
 ) {
-    fn select_slot(hotbar: &mut Hotbar, editor: &mut EditorState, slot: usize) {
+    fn select_slot(hotbar: &mut Hotbar, editor: &mut EditorState, slot: usize, tech_flags: u64) {
         hotbar.selected = slot;
         if let Some(tool) = hotbar.slots[slot] {
-            editor.tool = tool;
+            if is_tool_unlocked(tool, tech_flags) {
+                editor.tool = tool;
+            }
         }
     }
     let player = &mut *player;
+    let tech_flags = player.tech_flags;
     let ui_hovered = ui_interactions
         .iter()
         .any(|i| *i != Interaction::None);
     if keys.just_pressed(KeyCode::Digit1) {
-        select_slot(&mut hotbar, &mut editor, 0);
+        select_slot(&mut hotbar, &mut editor, 0, tech_flags);
     }
     if keys.just_pressed(KeyCode::Digit2) {
-        select_slot(&mut hotbar, &mut editor, 1);
+        select_slot(&mut hotbar, &mut editor, 1, tech_flags);
     }
     if keys.just_pressed(KeyCode::Digit3) {
-        select_slot(&mut hotbar, &mut editor, 2);
+        select_slot(&mut hotbar, &mut editor, 2, tech_flags);
     }
     if keys.just_pressed(KeyCode::Digit4) {
-        select_slot(&mut hotbar, &mut editor, 3);
+        select_slot(&mut hotbar, &mut editor, 3, tech_flags);
     }
     if keys.just_pressed(KeyCode::Digit5) {
-        select_slot(&mut hotbar, &mut editor, 4);
+        select_slot(&mut hotbar, &mut editor, 4, tech_flags);
     }
     if keys.just_pressed(KeyCode::Digit6) {
-        select_slot(&mut hotbar, &mut editor, 5);
+        select_slot(&mut hotbar, &mut editor, 5, tech_flags);
     }
     if keys.just_pressed(KeyCode::Digit7) {
-        select_slot(&mut hotbar, &mut editor, 6);
+        select_slot(&mut hotbar, &mut editor, 6, tech_flags);
     }
     if keys.just_pressed(KeyCode::Digit8) {
-        select_slot(&mut hotbar, &mut editor, 7);
+        select_slot(&mut hotbar, &mut editor, 7, tech_flags);
     }
     if keys.just_pressed(KeyCode::Digit9) {
-        select_slot(&mut hotbar, &mut editor, 8);
+        select_slot(&mut hotbar, &mut editor, 8, tech_flags);
     }
     if keys.just_pressed(KeyCode::Digit0) {
-        select_slot(&mut hotbar, &mut editor, 9);
+        select_slot(&mut hotbar, &mut editor, 9, tech_flags);
     }
     if keys.just_pressed(KeyCode::KeyR) {
         if editor.tool == Tool::Assembler {
@@ -505,7 +529,7 @@ pub fn handle_editor_input(
     let mut changed = false;
 
     // Place (held: drag-paint).
-    if buttons.pressed(MouseButton::Left) {
+    if buttons.pressed(MouseButton::Left) && is_tool_unlocked(editor.tool, player.tech_flags) {
         match editor.tool {
             Tool::Belt => {
                 if free && try_pay(tool_cost(Tool::Belt), player) {
@@ -654,6 +678,27 @@ pub fn handle_editor_input(
                         world.0.set_building(tx, ty, id);
                         changed = true;
                     }
+                }
+            }
+            Tool::RailTrack => {
+                if free && try_pay(tool_cost(Tool::RailTrack), player) {
+                    let id = sim.0.add_building(tx, ty, editor.dir, BuildingKind::RailTrack);
+                    world.0.set_building(tx, ty, id);
+                    changed = true;
+                }
+            }
+            Tool::RailStation => {
+                if free && try_pay(tool_cost(Tool::RailStation), player) {
+                    let id = sim.0.add_building(tx, ty, editor.dir, BuildingKind::RailStation);
+                    world.0.set_building(tx, ty, id);
+                    changed = true;
+                }
+            }
+            Tool::Turret => {
+                if free && try_pay(tool_cost(Tool::Turret), player) {
+                    let id = sim.0.add_building(tx, ty, editor.dir, BuildingKind::Turret);
+                    world.0.set_building(tx, ty, id);
+                    changed = true;
                 }
             }
             _ => {}
@@ -858,6 +903,62 @@ pub fn update_hotbar(
 }
 
 fn menu_button(parent: &mut ChildBuilder, tool: Tool, player: &PlayerState) {
+    let unlocked = is_tool_unlocked(tool, player.tech_flags);
+    if !unlocked {
+        if let Some(tech) = tech_for_tool(tool) {
+            let can_afford = player.research_points >= tech.cost();
+            parent
+                .spawn((
+                    ButtonBundle {
+                        style: Style {
+                            width: Val::Px(130.0),
+                            height: Val::Px(110.0),
+                            margin: UiRect::all(Val::Px(4.0)),
+                            padding: UiRect::all(Val::Px(4.0)),
+                            flex_direction: FlexDirection::Column,
+                            justify_content: JustifyContent::FlexStart,
+                            align_items: AlignItems::Center,
+                            ..default()
+                        },
+                        background_color: Color::srgba(0.15, 0.15, 0.15, 0.85).into(),
+                        ..default()
+                    },
+                    MenuUnlock(tech),
+                ))
+                .with_children(|p| {
+                    p.spawn(TextBundle::from_section(
+                        format!("[LOCKED] {}", tool_info(tool).name),
+                        TextStyle {
+                            font_size: 11.0,
+                            color: Color::srgb(0.55, 0.55, 0.55),
+                            ..default()
+                        },
+                    ));
+                    p.spawn(TextBundle::from_section(
+                        format!("{} RP", tech.cost()),
+                        TextStyle {
+                            font_size: 10.0,
+                            color: if can_afford {
+                                Color::srgb(0.65, 0.85, 0.95)
+                            } else {
+                                Color::srgb(0.95, 0.5, 0.5)
+                            },
+                            ..default()
+                        },
+                    ));
+                    p.spawn(TextBundle::from_section(
+                        tech.description(),
+                        TextStyle {
+                            font_size: 8.0,
+                            color: Color::srgb(0.6, 0.65, 0.72),
+                            ..default()
+                        },
+                    ));
+                });
+            return;
+        }
+    }
+
     let info = tool_info(tool);
     let affordable = player.credits >= info.cost.credits;
     let mut color = tool_color(tool);
@@ -959,6 +1060,8 @@ fn collect_by_category(tools: &[Tool]) -> Vec<(ToolCategory, Vec<Tool>)> {
         (ToolCategory::Logistics, vec![]),
         (ToolCategory::Production, vec![]),
         (ToolCategory::PowerFluids, vec![]),
+        (ToolCategory::Rail, vec![]),
+        (ToolCategory::Combat, vec![]),
         (ToolCategory::Tools, vec![]),
     ];
     for &tool in tools {
@@ -1000,6 +1103,9 @@ pub fn open_build_menu(
         Tool::Research1,
         Tool::Research2,
         Tool::Research3,
+        Tool::RailTrack,
+        Tool::RailStation,
+        Tool::Turret,
     ];
     let groups = collect_by_category(ALL_TOOLS);
     commands
@@ -1084,6 +1190,9 @@ pub fn handle_menu_clicks(
 ) {
     for (interaction, item) in interactions.iter_mut() {
         if *interaction == Interaction::Pressed {
+            if !is_tool_unlocked(item.0, player.tech_flags) {
+                continue;
+            }
             let info = tool_info(item.0);
             if player.credits < info.cost.credits {
                 continue;
@@ -1099,16 +1208,41 @@ pub fn handle_menu_clicks(
     }
 }
 
+pub fn handle_menu_unlocks(
+    mut interactions: Query<(&Interaction, &MenuUnlock), Changed<Interaction>>,
+    mut player: ResMut<PlayerState>,
+    mut menu: ResMut<BuildMenu>,
+    mut commands: Commands,
+    root: Query<Entity, With<MenuRoot>>,
+) {
+    for (interaction, unlock) in interactions.iter_mut() {
+        if *interaction == Interaction::Pressed {
+            let cost = unlock.0.cost();
+            if player.research_points >= cost {
+                player.research_points -= cost;
+                unlock_tech(&mut player.tech_flags, unlock.0);
+                menu.visible = false;
+                for e in root.iter() {
+                    commands.entity(e).despawn_recursive();
+                }
+            }
+        }
+    }
+}
+
 pub fn handle_hotbar_clicks(
     mut interactions: Query<(&Interaction, &HotbarSlot), Changed<Interaction>>,
     mut hotbar: ResMut<Hotbar>,
     mut editor: ResMut<EditorState>,
+    player: Res<PlayerState>,
 ) {
     for (interaction, slot) in interactions.iter_mut() {
         if *interaction == Interaction::Pressed {
             hotbar.selected = slot.0;
             if let Some(tool) = hotbar.slots[slot.0] {
-                editor.tool = tool;
+                if is_tool_unlocked(tool, player.tech_flags) {
+                    editor.tool = tool;
+                }
             }
         }
     }

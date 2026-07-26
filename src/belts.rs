@@ -49,6 +49,9 @@ pub enum BuildingKind {
     Pump,
     Tank,
     Lab,
+    RailTrack,
+    RailStation,
+    Turret,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -162,6 +165,9 @@ pub struct BeltSim {
     /// Rebuild power/fluid networks next tick when the world changes.
     #[serde(default = "default_true")]
     pub dirty_power: bool,
+    /// Rebuild rail networks next tick when the world changes.
+    #[serde(default = "default_true")]
+    pub dirty_rail: bool,
 }
 
 fn default_true() -> bool {
@@ -240,6 +246,7 @@ impl BeltSim {
             self.bld_fluid_ready[i] = false;
             self.bld_chunk[i] = Grid::chunk_key(x, y);
             self.dirty_power = true;
+            self.dirty_rail = matches!(kind, BuildingKind::RailTrack | BuildingKind::RailStation);
             return id;
         }
         let id = self.bld_x.len() as u32;
@@ -267,6 +274,7 @@ impl BeltSim {
         self.bld_fluid_ready.push(false);
         self.bld_chunk.push(Grid::chunk_key(x, y));
         self.dirty_power = true;
+        self.dirty_rail = matches!(kind, BuildingKind::RailTrack | BuildingKind::RailStation);
         id
     }
 
@@ -274,6 +282,7 @@ impl BeltSim {
         self.bld_active[id as usize] = false;
         self.free_blds.push(id);
         self.dirty_power = true;
+        self.dirty_rail = true;
     }
 
     pub fn free_item(&mut self, id: u32) {
