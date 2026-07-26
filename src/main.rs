@@ -68,24 +68,52 @@ fn run_sim(
     mut sim: ResMut<Sim>,
     world: Res<GameWorld>,
     target: Res<CameraTarget>,
+    mut active_chunks: Local<HashSet<(i32, i32)>>,
+    mut active_belts: Local<Vec<usize>>,
+    mut active_blds: Local<Vec<usize>>,
+    mut fluid_roots: Local<Vec<u32>>,
+    mut fluid_cap: Local<Vec<f32>>,
+    mut fluid_vol: Local<Vec<f32>>,
+    mut fluid_prod: Local<Vec<f32>>,
+    mut fluid_cons: Local<Vec<f32>>,
+    mut fluid_ready: Local<Vec<bool>>,
 ) {
-    let mut active = HashSet::new();
+    active_chunks.clear();
     let cx = (target.pos.x / (TILE * CHUNK_SIZE as f32)).floor() as i32;
     let cy = (target.pos.y / (TILE * CHUNK_SIZE as f32)).floor() as i32;
     for dy in -1..=1 {
         for dx in -1..=1 {
-            active.insert((cx + dx, cy + dy));
+            active_chunks.insert((cx + dx, cy + dy));
         }
     }
-    let active_belts: Vec<usize> = (0..sim.0.belt_count())
-        .filter(|&b| sim.0.belt_active[b] && active.contains(&sim.0.belt_chunk[b]))
-        .collect();
-    let active_blds: Vec<usize> = (0..sim.0.bld_x.len())
-        .filter(|&s| sim.0.bld_active[s] && active.contains(&sim.0.bld_chunk[s]))
-        .collect();
+    active_belts.clear();
+    active_belts.extend(
+        (0..sim.0.belt_count())
+            .filter(|&b| sim.0.belt_active[b] && active_chunks.contains(&sim.0.belt_chunk[b])),
+    );
+    active_blds.clear();
+    active_blds.extend(
+        (0..sim.0.bld_x.len())
+            .filter(|&s| sim.0.bld_active[s] && active_chunks.contains(&sim.0.bld_chunk[s])),
+    );
     sim::rebuild_power(&mut sim.0, &active_blds);
-    sim::rebuild_fluid_networks(&mut sim.0, &active_blds);
-    sim::tick_fluids(&mut sim.0, &active_blds);
+    let net_count =
+        sim::rebuild_fluid_networks(&mut sim.0, &active_blds, &mut fluid_roots);
+    fluid_cap.resize(net_count, 0.0);
+    fluid_vol.resize(net_count, 0.0);
+    fluid_prod.resize(net_count, 0.0);
+    fluid_cons.resize(net_count, 0.0);
+    fluid_ready.resize(net_count, false);
+    sim::tick_fluids(
+        &mut sim.0,
+        &active_blds,
+        net_count,
+        &mut fluid_cap,
+        &mut fluid_vol,
+        &mut fluid_prod,
+        &mut fluid_cons,
+        &mut fluid_ready,
+    );
     sim::tick_buildings(&mut sim.0, &world.0, &active_blds);
     sim::tick(&mut sim.0, &active_belts);
 }

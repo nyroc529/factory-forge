@@ -159,12 +159,13 @@ pub fn rebuild_power(sim: &mut BeltSim, active_blds: &[usize]) {
         }
     }
 
-    let mut comp_supply = std::collections::HashMap::<usize, f32>::new();
-    let mut comp_demand = std::collections::HashMap::<usize, f32>::new();
+    // Per-root (0..n) aggregates. Roots are valid indices into these arrays.
+    let mut comp_supply = vec![0.0f32; n];
+    let mut comp_demand = vec![0.0f32; n];
     for idx in 0..n {
         let root = uf.find(idx);
-        *comp_supply.entry(root).or_default() += supply[idx];
-        *comp_demand.entry(root).or_default() += demand[idx];
+        comp_supply[root] += supply[idx];
+        comp_demand[root] += demand[idx];
     }
 
     for (idx, &s) in nodes.iter().enumerate() {
@@ -172,16 +173,16 @@ pub fn rebuild_power(sim: &mut BeltSim, active_blds: &[usize]) {
             continue;
         }
         let root = uf.find(idx);
-        let have = comp_supply.get(&root).copied().unwrap_or(0.0);
-        let need = comp_demand.get(&root).copied().unwrap_or(0.0);
-        if have >= need {
+        if comp_supply[root] >= comp_demand[root] {
             sim.bld_powered[s] = true;
         }
     }
 }
 
 /// Recompute connected fluid networks among active buildings (call each tick).
-pub fn rebuild_fluid_networks(sim: &mut BeltSim, active_blds: &[usize]) {
+/// `root_map` is a scratch buffer that will be reused across frames.
+/// Returns the number of contiguous network ids (0..count-1).
+pub fn rebuild_fluid_networks(sim: &mut BeltSim, active_blds: &[usize], root_map: &mut Vec<u32>) -> usize {
     // Refresh assembler capacities in case the recipe changed.
     for &s in active_blds {
         let cap = match sim.bld_kind[s] {
@@ -227,45 +228,68 @@ pub fn rebuild_fluid_networks(sim: &mut BeltSim, active_blds: &[usize]) {
         }
     }
 
+    root_map.resize(n, INVALID);
+    root_map.fill(INVALID);
     let mut net_id = 0u32;
-    let mut root_to_id = std::collections::HashMap::new();
     for idx in 0..n {
         let root = uf.find(idx);
-        let id = *root_to_id.entry(root).or_insert_with(|| {
-            let cur = net_id;
+        if root_map[root] == INVALID {
+            root_map[root] = net_id;
             net_id += 1;
-            cur
-        });
-        sim.bld_fluid_network[nodes[idx]] = id;
+        }
+        sim.bld_fluid_network[nodes[idx]] = root_map[root];
     }
+    net_id as usize
 }
 
 /// Resolve fluid production/consumption per network for this tick.
-pub fn tick_fluids(sim: &mut BeltSim, active_blds: &[usize]) {
+/// All scratch slices must be at least `net_count` long.
+pub fn tick_fluids(
+    sim: &mut BeltSim,
+    active_blds: &[usize],
+    net_count: usize,
+    cap: &mut [f32],
+    vol: &mut [f32],
+    prod: &mut [f32],
+    cons: &mut [f32],
+    ready: &mut [bool],
+) {
+    // Clear per-network and per-assembler ready state.
+    for x in cap.iter_mut().take(net_count) {
+        *x = 0.0;
+    }
+    for x in vol.iter_mut().take(net_count) {
+        *x = 0.0;
+    }
+    for x in prod.iter_mut().take(net_count) {
+        *x = 0.0;
+    }
+    for x in cons.iter_mut().take(net_count) {
+        *x = 0.0;
+    }
+    for x in ready.iter_mut().take(net_count) {
+        *x = false;
+    }
     for &s in active_blds {
         sim.bld_fluid_ready[s] = false;
     }
 
-    let mut cap = std::collections::HashMap::<u32, f32>::new();
-    let mut vol = std::collections::HashMap::<u32, f32>::new();
-    let mut prod = std::collections::HashMap::<u32, f32>::new();
-    let mut cons = std::collections::HashMap::<u32, f32>::new();
-
+    // First pass: aggregate capacity, current volume, production and planned consumption.
     for &s in active_blds {
         let capacity = sim.bld_fluid_capacity[s];
         if capacity == 0 || sim.bld_fluid_network[s] == INVALID {
             continue;
         }
-        let net = sim.bld_fluid_network[s];
-        *cap.entry(net).or_default() += capacity as f32;
-        *vol.entry(net).or_default() += sim.bld_fluid_volume[s];
+        let net = sim.bld_fluid_network[s] as usize;
+        cap[net] += capacity as f32;
+        vol[net] += sim.bld_fluid_volume[s];
         // Pumps and assemblers only move fluid when powered.
         if !sim.bld_powered[s] {
             continue;
         }
         match sim.bld_kind[s] {
             BuildingKind::Pump => {
-                *prod.entry(net).or_default() += FLUID_PUMP_RATE;
+                prod[net] += FLUID_PUMP_RATE;
             }
             BuildingKind::Assembler => {
                 let recipe_idx = sim.bld_param[s] as usize;
@@ -275,7 +299,7 @@ pub fn tick_fluids(sim: &mut BeltSim, active_blds: &[usize]) {
                         && (0..KINDS).all(|k| sim.bld_in[s][k] >= r.input[k])
                         && sim.bld_out[s][r.output_kind] < STORAGE_CAP
                     {
-                        *cons.entry(net).or_default() += r.fluid_input as f32;
+                        cons[net] += r.fluid_input as f32;
                     }
                 }
             }
@@ -283,27 +307,24 @@ pub fn tick_fluids(sim: &mut BeltSim, active_blds: &[usize]) {
         }
     }
 
-    let mut satisfied = std::collections::HashSet::<u32>::new();
-    for &net in cap.keys() {
-        let have = vol.get(&net).copied().unwrap_or(0.0) + prod.get(&net).copied().unwrap_or(0.0);
-        let need = cons.get(&net).copied().unwrap_or(0.0);
-        if have >= need {
-            satisfied.insert(net);
-        }
+    // Decide which networks can satisfy their assemblers this tick.
+    for net in 0..net_count {
+        ready[net] = (vol[net] + prod[net]) >= cons[net];
     }
 
+    // Mark assemblers as fluid-ready.
     for &s in active_blds {
         if sim.bld_fluid_capacity[s] == 0 || sim.bld_fluid_network[s] == INVALID {
             continue;
         }
         if sim.bld_kind[s] == BuildingKind::Assembler && sim.bld_timer[s] == 0 {
-            let net = sim.bld_fluid_network[s];
+            let net = sim.bld_fluid_network[s] as usize;
             let recipe_idx = sim.bld_param[s] as usize;
             if let Some(r) = RECIPES.get(recipe_idx) {
                 if r.fluid_input > 0
                     && (0..KINDS).all(|k| sim.bld_in[s][k] >= r.input[k])
                     && sim.bld_out[s][r.output_kind] < STORAGE_CAP
-                    && satisfied.contains(&net)
+                    && ready[net]
                 {
                     sim.bld_fluid_ready[s] = true;
                 }
@@ -311,27 +332,27 @@ pub fn tick_fluids(sim: &mut BeltSim, active_blds: &[usize]) {
         }
     }
 
-    let mut new_vol = std::collections::HashMap::<u32, f32>::new();
-    for (&net, &total_cap) in &cap {
-        let have = vol.get(&net).copied().unwrap_or(0.0) + prod.get(&net).copied().unwrap_or(0.0);
-        let need = cons.get(&net).copied().unwrap_or(0.0);
-        let after = if satisfied.contains(&net) {
-            have - need
+    // Apply production/consumption and clamp to network capacity.
+    for net in 0..net_count {
+        let after = if ready[net] {
+            vol[net] + prod[net] - cons[net]
         } else {
-            have
+            vol[net] + prod[net]
         };
-        new_vol.insert(net, after.clamp(0.0, total_cap));
+        vol[net] = after.clamp(0.0, cap[net]);
     }
 
+    // Redistribute network volume proportionally by node capacity.
     for &s in active_blds {
         let capacity = sim.bld_fluid_capacity[s];
         if capacity == 0 || sim.bld_fluid_network[s] == INVALID {
             continue;
         }
-        let net = sim.bld_fluid_network[s];
-        let total_cap = cap.get(&net).copied().unwrap_or(1.0);
-        let total_new = new_vol.get(&net).copied().unwrap_or(0.0);
-        sim.bld_fluid_volume[s] = total_new * (capacity as f32 / total_cap);
+        let net = sim.bld_fluid_network[s] as usize;
+        let total_cap = cap[net];
+        if total_cap > 0.0 {
+            sim.bld_fluid_volume[s] = vol[net] * (capacity as f32 / total_cap);
+        }
     }
 }
 
@@ -612,9 +633,31 @@ mod tests {
 
         rebuild_power(&mut sim, &active_blds);
         assert!(sim.bld_powered[pump as usize], "pump must be powered");
+
+        let mut fluid_roots = vec![];
+        let mut fluid_cap = vec![];
+        let mut fluid_vol = vec![];
+        let mut fluid_prod = vec![];
+        let mut fluid_cons = vec![];
+        let mut fluid_ready = vec![];
         for _ in 0..250 {
-            rebuild_fluid_networks(&mut sim, &active_blds);
-            tick_fluids(&mut sim, &active_blds);
+            let net_count =
+                rebuild_fluid_networks(&mut sim, &active_blds, &mut fluid_roots);
+            fluid_cap.resize(net_count, 0.0);
+            fluid_vol.resize(net_count, 0.0);
+            fluid_prod.resize(net_count, 0.0);
+            fluid_cons.resize(net_count, 0.0);
+            fluid_ready.resize(net_count, false);
+            tick_fluids(
+                &mut sim,
+                &active_blds,
+                net_count,
+                &mut fluid_cap,
+                &mut fluid_vol,
+                &mut fluid_prod,
+                &mut fluid_cons,
+                &mut fluid_ready,
+            );
             tick_buildings(&mut sim, &grid, &active_blds);
             tick(&mut sim, &active_belts);
         }
@@ -644,9 +687,31 @@ mod tests {
         let active_belts: Vec<usize> = vec![];
 
         rebuild_power(&mut sim, &active_blds);
+
+        let mut fluid_roots = vec![];
+        let mut fluid_cap = vec![];
+        let mut fluid_vol = vec![];
+        let mut fluid_prod = vec![];
+        let mut fluid_cons = vec![];
+        let mut fluid_ready = vec![];
         for _ in 0..100 {
-            rebuild_fluid_networks(&mut sim, &active_blds);
-            tick_fluids(&mut sim, &active_blds);
+            let net_count =
+                rebuild_fluid_networks(&mut sim, &active_blds, &mut fluid_roots);
+            fluid_cap.resize(net_count, 0.0);
+            fluid_vol.resize(net_count, 0.0);
+            fluid_prod.resize(net_count, 0.0);
+            fluid_cons.resize(net_count, 0.0);
+            fluid_ready.resize(net_count, false);
+            tick_fluids(
+                &mut sim,
+                &active_blds,
+                net_count,
+                &mut fluid_cap,
+                &mut fluid_vol,
+                &mut fluid_prod,
+                &mut fluid_cons,
+                &mut fluid_ready,
+            );
             tick_buildings(&mut sim, &grid, &active_blds);
             tick(&mut sim, &active_belts);
         }
