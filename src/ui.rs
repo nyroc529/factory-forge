@@ -594,6 +594,154 @@ fn copy_blueprint(
     }
 }
 
+#[derive(Component)]
+pub struct ToolButton(pub Tool);
+
+fn tool_color(tool: Tool) -> Color {
+    match tool {
+        Tool::Belt => Color::srgb(0.75, 0.70, 0.35),
+        Tool::Source => Color::srgb(0.16, 0.45, 0.42),
+        Tool::Sink => Color::srgb(0.55, 0.18, 0.18),
+        Tool::Assembler => Color::srgb(0.20, 0.60, 0.30),
+        Tool::Inserter => Color::srgb(0.55, 0.42, 0.12),
+        Tool::Miner => Color::srgb(0.38, 0.18, 0.42),
+        Tool::Storage => Color::srgb(0.22, 0.32, 0.40),
+        Tool::Shipment => Color::srgb(0.20, 0.55, 0.40),
+        Tool::Splitter => Color::srgb(0.55, 0.50, 0.18),
+        Tool::Select => Color::srgb(0.80, 0.80, 0.82),
+        Tool::Paste => Color::srgb(0.30, 0.45, 0.65),
+        Tool::Pole => Color::srgb(0.55, 0.55, 0.60),
+        Tool::Generator => Color::srgb(0.90, 0.80, 0.25),
+        Tool::Pipe => Color::srgb(0.45, 0.45, 0.55),
+        Tool::Pump => Color::srgb(0.25, 0.45, 0.65),
+        Tool::Tank => Color::srgb(0.45, 0.50, 0.55),
+        Tool::Lab => Color::srgb(0.20, 0.55, 0.45),
+    }
+}
+
+fn tool_key(tool: Tool) -> &'static str {
+    match tool {
+        Tool::Belt => "1",
+        Tool::Source => "2",
+        Tool::Sink => "3",
+        Tool::Assembler => "4",
+        Tool::Inserter => "5",
+        Tool::Miner => "6",
+        Tool::Storage => "7",
+        Tool::Shipment => "8",
+        Tool::Splitter => "9",
+        Tool::Select => "0",
+        Tool::Paste => "V",
+        Tool::Pole => "P",
+        Tool::Generator => "G",
+        Tool::Pipe => "U",
+        Tool::Pump => "J",
+        Tool::Tank => "K",
+        Tool::Lab => "L",
+    }
+}
+
+fn tool_label(tool: Tool) -> &'static str {
+    match tool {
+        Tool::Belt => "belt",
+        Tool::Source => "source",
+        Tool::Sink => "sink",
+        Tool::Assembler => "asm",
+        Tool::Inserter => "ins",
+        Tool::Miner => "miner",
+        Tool::Storage => "store",
+        Tool::Shipment => "ship",
+        Tool::Splitter => "split",
+        Tool::Select => "sel",
+        Tool::Paste => "paste",
+        Tool::Pole => "pole",
+        Tool::Generator => "gen",
+        Tool::Pipe => "pipe",
+        Tool::Pump => "pump",
+        Tool::Tank => "tank",
+        Tool::Lab => "lab",
+    }
+}
+
+pub fn setup_toolbar(mut commands: Commands) {
+    let tools = [
+        Tool::Belt,
+        Tool::Source,
+        Tool::Sink,
+        Tool::Assembler,
+        Tool::Inserter,
+        Tool::Miner,
+        Tool::Storage,
+        Tool::Shipment,
+        Tool::Splitter,
+        Tool::Select,
+        Tool::Paste,
+        Tool::Pole,
+        Tool::Generator,
+        Tool::Pipe,
+        Tool::Pump,
+        Tool::Tank,
+        Tool::Lab,
+    ];
+    commands
+        .spawn(NodeBundle {
+            style: Style {
+                position_type: PositionType::Absolute,
+                bottom: Val::Px(8.0),
+                left: Val::Px(0.0),
+                right: Val::Px(0.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            ..default()
+        })
+        .with_children(|parent| {
+            for tool in tools {
+                let color = tool_color(tool);
+                parent
+                    .spawn((
+                        NodeBundle {
+                            style: Style {
+                                width: Val::Px(44.0),
+                                height: Val::Px(44.0),
+                                margin: UiRect::all(Val::Px(2.0)),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                ..default()
+                            },
+                            background_color: color.into(),
+                            ..default()
+                        },
+                        ToolButton(tool),
+                    ))
+                    .with_children(|p| {
+                        p.spawn(TextBundle::from_section(
+                            format!("{}\n{}", tool_key(tool), tool_label(tool)),
+                            TextStyle {
+                                font_size: 9.0,
+                                color: Color::srgb(0.95, 0.95, 0.95),
+                                ..default()
+                            },
+                        ));
+                    });
+            }
+        });
+}
+
+pub fn update_toolbar(
+    editor: Res<EditorState>,
+    mut buttons: Query<(&ToolButton, &mut BackgroundColor)>,
+) {
+    for (btn, mut bg) in buttons.iter_mut() {
+        if btn.0 == editor.tool {
+            *bg = Color::srgb(1.0, 1.0, 1.0).into();
+        } else {
+            *bg = tool_color(btn.0).into();
+        }
+    }
+}
+
 const SAVE_PATH: &str = "factory.save";
 
 /// F5 saves the whole world (flat arrays serialize directly); F9 loads it.

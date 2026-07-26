@@ -401,19 +401,15 @@ fn emit_item(
     };
     let pos = prev.lerp(cur, alpha);
     let kind = sim.item_type[i] as usize;
-    // Per-item-kind shape and rotation so the expanded palette is readable.
+    // Per-item-kind shape and rotation. Sides are capped at 6 to keep the
+    // dynamic mesh vertex count low; distinct colors already identify items.
     let (sides, base_rot) = match kind {
-        0 => (6u32, 1.0_f32),                        // iron: circle
+        0 => (6u32, 1.0_f32),                        // iron: hexagon/circle
         1 => (4u32, 0.0_f32),                        // copper: square
         2 => (3u32, 0.0_f32),                        // coal: triangle
         3 => (5u32, 0.0_f32),                        // gear: pentagon
         4 => (4u32, std::f32::consts::FRAC_PI_4),    // steel: diamond
-        5 => (6u32, std::f32::consts::FRAC_PI_6),    // stone: hexagon
-        6 => (7u32, 0.0_f32),                        // oil: heptagon
-        7 => (8u32, 0.0_f32),                        // plastic: octagon
-        8 => (9u32, 0.0_f32),                        // circuit: nonagon
-        9 => (10u32, 0.0_f32),                       // brick: decagon
-        _ => (11u32, 0.0_f32),                       // science: hendecagon
+        _ => (6u32, kind as f32 * 0.7),              // everything else: hexagon, varied rotation
     };
     let phase = i as f32 * 0.37;
     let pulse = if detail {
@@ -462,8 +458,8 @@ pub fn build_dynamic_mesh(
     let t = time.elapsed_seconds();
     let mut batch = MeshBatch::default();
 
-    // Level of detail: when zoomed far out, skip decoration.
-    let detail = proj.scale < 6.0;
+    // Level of detail: skip decorative overlays when zoomed out.
+    let detail = proj.scale < 2.5;
 
     // Walk only the grid tiles inside the view instead of scanning every
     // item/belt/building in the world.
@@ -627,7 +623,9 @@ pub fn camera_control(
     target.pos += pan.normalize_or_zero() * 600.0 * zoom * dt;
 
     for ev in wheel.read() {
-        target.zoom = (target.zoom * (1.0 - ev.y * 0.1)).clamp(0.25, 20.0);
+        // Clamp each wheel event so trackpads don't leap multiple levels at once.
+        let delta = ev.y.clamp(-1.0, 1.0);
+        target.zoom = (target.zoom * (1.0 - delta * 0.08)).clamp(0.5, 10.0);
     }
 
     let ease = 1.0 - (-10.0 * dt).exp();
