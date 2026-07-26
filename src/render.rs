@@ -265,9 +265,11 @@ pub fn rebuild_static_mesh(
             }
             let c = Vec2::new((x as f32 - 0.5) * TILE, (y as f32 - 0.5) * TILE);
             let ore_color = match ore {
-                1 => lin(Color::srgb(0.42, 0.22, 0.10)), // amber
-                2 => lin(Color::srgb(0.09, 0.28, 0.42)), // sky
-                3 => lin(Color::srgb(0.10, 0.36, 0.12)), // lime
+                1 => lin(Color::srgb(0.42, 0.22, 0.10)), // iron
+                2 => lin(Color::srgb(0.09, 0.28, 0.42)), // copper
+                3 => lin(Color::srgb(0.15, 0.15, 0.16)), // coal
+                6 => lin(Color::srgb(0.55, 0.55, 0.53)), // stone
+                7 => lin(Color::srgb(0.30, 0.15, 0.40)), // oil
                 _ => lin(Color::srgb(0.35, 0.25, 0.18)),
             };
             batch.quad(c, TILE * 0.43, TILE * 0.43, 0.0, ore_color);
