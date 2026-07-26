@@ -16,6 +16,48 @@ pub struct Selection {
     pub building: Option<u32>,
 }
 
+/// Customizable bottom hotbar: slots 0-9 mapped to number keys.
+#[derive(Resource)]
+pub struct Hotbar {
+    pub slots: [Option<Tool>; 10],
+    pub selected: usize,
+}
+
+impl Default for Hotbar {
+    fn default() -> Self {
+        Self {
+            slots: [
+                Some(Tool::Belt),
+                Some(Tool::Source),
+                Some(Tool::Sink),
+                Some(Tool::Assembler),
+                Some(Tool::Inserter),
+                Some(Tool::Miner),
+                Some(Tool::Storage),
+                Some(Tool::Shipment),
+                Some(Tool::Splitter),
+                Some(Tool::Select),
+            ],
+            selected: 0,
+        }
+    }
+}
+
+/// Inventory/build menu toggle state.
+#[derive(Resource, Default)]
+pub struct BuildMenu {
+    pub visible: bool,
+}
+
+#[derive(Component)]
+pub struct HotbarSlot(pub usize);
+
+#[derive(Component)]
+pub struct MenuItem(pub Tool);
+
+#[derive(Component)]
+pub struct MenuRoot;
+
 /// Undo/redo snapshots of the whole world.
 #[derive(Resource, Default)]
 pub struct History {
@@ -137,6 +179,50 @@ impl EditorState {
     }
 }
 
+pub fn tool_color(tool: Tool) -> Color {
+    match tool {
+        Tool::Belt => Color::srgb(0.75, 0.70, 0.35),
+        Tool::Source => Color::srgb(0.16, 0.45, 0.42),
+        Tool::Sink => Color::srgb(0.55, 0.18, 0.18),
+        Tool::Assembler => Color::srgb(0.20, 0.60, 0.30),
+        Tool::Inserter => Color::srgb(0.55, 0.42, 0.12),
+        Tool::Miner => Color::srgb(0.38, 0.18, 0.42),
+        Tool::Storage => Color::srgb(0.22, 0.32, 0.40),
+        Tool::Shipment => Color::srgb(0.20, 0.55, 0.40),
+        Tool::Splitter => Color::srgb(0.55, 0.50, 0.18),
+        Tool::Select => Color::srgb(0.45, 0.45, 0.50),
+        Tool::Paste => Color::srgb(0.30, 0.45, 0.65),
+        Tool::Pole => Color::srgb(0.55, 0.55, 0.60),
+        Tool::Generator => Color::srgb(0.90, 0.80, 0.25),
+        Tool::Pipe => Color::srgb(0.45, 0.45, 0.55),
+        Tool::Pump => Color::srgb(0.25, 0.45, 0.65),
+        Tool::Tank => Color::srgb(0.45, 0.50, 0.55),
+        Tool::Lab => Color::srgb(0.20, 0.55, 0.45),
+    }
+}
+
+pub fn tool_label(tool: Tool) -> &'static str {
+    match tool {
+        Tool::Belt => "belt",
+        Tool::Source => "source",
+        Tool::Sink => "sink",
+        Tool::Assembler => "asm",
+        Tool::Inserter => "ins",
+        Tool::Miner => "miner",
+        Tool::Storage => "store",
+        Tool::Shipment => "ship",
+        Tool::Splitter => "split",
+        Tool::Select => "sel",
+        Tool::Paste => "paste",
+        Tool::Pole => "pole",
+        Tool::Generator => "gen",
+        Tool::Pipe => "pipe",
+        Tool::Pump => "pump",
+        Tool::Tank => "tank",
+        Tool::Lab => "lab",
+    }
+}
+
 fn delta_dir(from: (i32, i32), to: (i32, i32)) -> Option<Dir> {
     match (to.0 - from.0, to.1 - from.1) {
         (1, 0) => Some(Dir::East),
@@ -190,37 +276,49 @@ pub fn handle_editor_input(
     mut history: ResMut<History>,
     mut selection: ResMut<Selection>,
     mut blueprint: ResMut<Blueprint>,
+    mut hotbar: ResMut<Hotbar>,
+    menu: Res<BuildMenu>,
+    ui_interactions: Query<&Interaction>,
     mut ghost: Query<(&mut Transform, &mut Visibility, &mut Sprite), With<Ghost>>,
 ) {
-    if keys.just_pressed(KeyCode::Digit0) {
-        editor.tool = Tool::Select;
+    fn select_slot(hotbar: &mut Hotbar, editor: &mut EditorState, slot: usize) {
+        hotbar.selected = slot;
+        if let Some(tool) = hotbar.slots[slot] {
+            editor.tool = tool;
+        }
     }
+    let ui_hovered = ui_interactions
+        .iter()
+        .any(|i| *i != Interaction::None);
     if keys.just_pressed(KeyCode::Digit1) {
-        editor.tool = Tool::Belt;
+        select_slot(&mut hotbar, &mut editor, 0);
     }
     if keys.just_pressed(KeyCode::Digit2) {
-        editor.tool = Tool::Source;
+        select_slot(&mut hotbar, &mut editor, 1);
     }
     if keys.just_pressed(KeyCode::Digit3) {
-        editor.tool = Tool::Sink;
+        select_slot(&mut hotbar, &mut editor, 2);
     }
     if keys.just_pressed(KeyCode::Digit4) {
-        editor.tool = Tool::Assembler;
+        select_slot(&mut hotbar, &mut editor, 3);
     }
     if keys.just_pressed(KeyCode::Digit5) {
-        editor.tool = Tool::Inserter;
+        select_slot(&mut hotbar, &mut editor, 4);
     }
     if keys.just_pressed(KeyCode::Digit6) {
-        editor.tool = Tool::Miner;
+        select_slot(&mut hotbar, &mut editor, 5);
     }
     if keys.just_pressed(KeyCode::Digit7) {
-        editor.tool = Tool::Storage;
+        select_slot(&mut hotbar, &mut editor, 6);
     }
     if keys.just_pressed(KeyCode::Digit8) {
-        editor.tool = Tool::Shipment;
+        select_slot(&mut hotbar, &mut editor, 7);
     }
     if keys.just_pressed(KeyCode::Digit9) {
-        editor.tool = Tool::Splitter;
+        select_slot(&mut hotbar, &mut editor, 8);
+    }
+    if keys.just_pressed(KeyCode::Digit0) {
+        select_slot(&mut hotbar, &mut editor, 9);
     }
     if keys.just_pressed(KeyCode::KeyR) {
         if editor.tool == Tool::Assembler {
@@ -261,32 +359,22 @@ pub fn handle_editor_input(
             editor.tool = Tool::Paste;
         }
     }
-    if keys.just_pressed(KeyCode::KeyP) {
-        editor.tool = Tool::Pole;
-    }
-    if keys.just_pressed(KeyCode::KeyG) {
-        editor.tool = Tool::Generator;
-    }
-    if keys.just_pressed(KeyCode::KeyU) {
-        editor.tool = Tool::Pipe;
-    }
-    if keys.just_pressed(KeyCode::KeyJ) {
-        editor.tool = Tool::Pump;
-    }
-    if keys.just_pressed(KeyCode::KeyK) {
-        editor.tool = Tool::Tank;
-    }
-    if keys.just_pressed(KeyCode::KeyL) {
-        editor.tool = Tool::Lab;
-    }
-    if keys.just_pressed(KeyCode::Escape) {
-        editor.tool = Tool::Belt;
+    if keys.just_pressed(KeyCode::Escape) && !menu.visible {
+        editor.tool = Hotbar::default().slots[0].unwrap_or(Tool::Belt);
         selection.start = None;
         selection.end = None;
         selection.building = None;
     }
     if !buttons.pressed(MouseButton::Left) {
         editor.last_tile = None;
+    }
+
+    // Block world interaction when the menu is open or the cursor is over UI.
+    if menu.visible || ui_hovered {
+        if let Ok((_, mut gvis, _)) = ghost.get_single_mut() {
+            *gvis = Visibility::Hidden;
+        }
+        return;
     }
 
     // Snapshot before any world-mutating stroke (paste, drag-paint, erase).
@@ -628,6 +716,259 @@ pub fn save_load(
                 Err(e) => error!("deserialize failed: {e}"),
             },
             Err(e) => error!("load failed: {e}"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------- UI systems
+
+pub fn setup_hotbar(mut commands: Commands) {
+    commands
+        .spawn(NodeBundle {
+            style: Style {
+                position_type: PositionType::Absolute,
+                bottom: Val::Px(8.0),
+                left: Val::Px(0.0),
+                right: Val::Px(0.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            ..default()
+        })
+        .with_children(|parent| {
+            for i in 0..10 {
+                let key = if i == 9 { "0" } else { &["1","2","3","4","5","6","7","8","9"][i] };
+                parent
+                    .spawn((
+                        ButtonBundle {
+                            style: Style {
+                                width: Val::Px(48.0),
+                                height: Val::Px(48.0),
+                                margin: UiRect::all(Val::Px(2.0)),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                ..default()
+                            },
+                            background_color: BackgroundColor(Color::srgb(0.25, 0.27, 0.30)),
+                            ..default()
+                        },
+                        HotbarSlot(i),
+                    ))
+                    .with_children(|p| {
+                        p.spawn(TextBundle::from_section(
+                            format!("{key}\n?"),
+                            TextStyle {
+                                font_size: 10.0,
+                                color: Color::srgb(0.95, 0.95, 0.95),
+                                ..default()
+                            },
+                        ));
+                    });
+            }
+        });
+}
+
+pub fn update_hotbar(
+    hotbar: Res<Hotbar>,
+    mut slots: Query<(&HotbarSlot, &mut BackgroundColor, &Children)>,
+    mut texts: Query<&mut Text>,
+) {
+    for (slot, mut bg, children) in slots.iter_mut() {
+        let label = if let Some(tool) = hotbar.slots[slot.0] {
+            *bg = tool_color(tool).into();
+            tool_label(tool)
+        } else {
+            *bg = Color::srgb(0.25, 0.27, 0.30).into();
+            ""
+        };
+        let key = if slot.0 == 9 { "0" } else { &["1","2","3","4","5","6","7","8","9"][slot.0] };
+        for &child in children.iter() {
+            if let Ok(mut text) = texts.get_mut(child) {
+                text.sections[0].value = format!("{key}\n{label}");
+            }
+        }
+        // Highlight selected slot.
+        if slot.0 == hotbar.selected {
+            let c: Color = (*bg).0.into();
+            *bg = c.mix(&Color::WHITE, 0.4).into();
+        }
+    }
+}
+
+fn menu_button(parent: &mut ChildBuilder, tool: Tool) {
+    let color = tool_color(tool);
+    parent
+        .spawn((
+            ButtonBundle {
+                style: Style {
+                    width: Val::Px(80.0),
+                    height: Val::Px(80.0),
+                    margin: UiRect::all(Val::Px(4.0)),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                background_color: color.into(),
+                ..default()
+            },
+            MenuItem(tool),
+        ))
+        .with_children(|p| {
+            p.spawn(TextBundle::from_section(
+                tool_label(tool),
+                TextStyle {
+                    font_size: 12.0,
+                    color: Color::srgb(0.95, 0.95, 0.95),
+                    ..default()
+                },
+            ));
+        });
+}
+
+fn menu_category(parent: &mut ChildBuilder, title: &str, tools: &[Tool]) {
+    parent
+        .spawn(NodeBundle {
+            style: Style {
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                margin: UiRect::all(Val::Px(8.0)),
+                ..default()
+            },
+            ..default()
+        })
+        .with_children(|p| {
+            p.spawn(TextBundle::from_section(
+                title,
+                TextStyle {
+                    font_size: 14.0,
+                    color: Color::srgb(0.8, 0.85, 0.92),
+                    ..default()
+                },
+            ));
+            p.spawn(NodeBundle {
+                style: Style {
+                    flex_direction: FlexDirection::Row,
+                    ..default()
+                },
+                ..default()
+            })
+            .with_children(|row| {
+                for &tool in tools {
+                    menu_button(row, tool);
+                }
+            });
+        });
+}
+
+pub fn open_build_menu(mut commands: Commands, hotbar: Res<Hotbar>) {
+    let selected_label = hotbar
+        .slots[hotbar.selected]
+        .map(tool_label)
+        .unwrap_or("empty");
+    commands
+        .spawn((
+            NodeBundle {
+                style: Style {
+                    position_type: PositionType::Absolute,
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                background_color: Color::srgba(0.0, 0.0, 0.0, 0.65).into(),
+                ..default()
+            },
+            MenuRoot,
+        ))
+        .with_children(|root| {
+            root.spawn(TextBundle::from_section(
+                format!("Build Menu (Q/Esc to close)\nSelected slot {}: {}",
+                    if hotbar.selected == 9 { "0" } else { &["1","2","3","4","5","6","7","8","9"][hotbar.selected] },
+                    selected_label),
+                TextStyle {
+                    font_size: 18.0,
+                    color: Color::srgb(0.9, 0.9, 0.95),
+                    ..default()
+                },
+            ));
+            root.spawn(NodeBundle {
+                style: Style {
+                    position_type: PositionType::Absolute,
+                    top: Val::Px(60.0),
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                ..default()
+            })
+            .with_children(|body| {
+                menu_category(body, "Logistics", &[Tool::Belt, Tool::Inserter, Tool::Splitter]);
+                menu_category(body, "Production", &[Tool::Miner, Tool::Assembler, Tool::Source, Tool::Sink, Tool::Storage, Tool::Shipment]);
+                menu_category(body, "Power & Fluids", &[Tool::Pole, Tool::Generator, Tool::Pipe, Tool::Pump, Tool::Tank, Tool::Lab]);
+                menu_category(body, "Tools", &[Tool::Select, Tool::Paste]);
+            });
+        });
+}
+
+pub fn handle_menu_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut menu: ResMut<BuildMenu>,
+    mut commands: Commands,
+    root: Query<Entity, With<MenuRoot>>,
+    hotbar: Res<Hotbar>,
+) {
+    let toggle = keys.just_pressed(KeyCode::KeyQ) || keys.just_pressed(KeyCode::Tab);
+    let close = keys.just_pressed(KeyCode::Escape);
+    if toggle {
+        menu.visible = !menu.visible;
+    } else if close && menu.visible {
+        menu.visible = false;
+    } else {
+        return;
+    }
+
+    for e in root.iter() {
+        commands.entity(e).despawn_recursive();
+    }
+    if menu.visible {
+        open_build_menu(commands, hotbar);
+    }
+}
+
+pub fn handle_menu_clicks(
+    mut interactions: Query<(&Interaction, &MenuItem), Changed<Interaction>>,
+    mut hotbar: ResMut<Hotbar>,
+    mut editor: ResMut<EditorState>,
+    mut menu: ResMut<BuildMenu>,
+    mut commands: Commands,
+    root: Query<Entity, With<MenuRoot>>,
+) {
+    for (interaction, item) in interactions.iter_mut() {
+        if *interaction == Interaction::Pressed {
+            let slot = hotbar.selected;
+            hotbar.slots[slot] = Some(item.0);
+            editor.tool = item.0;
+            menu.visible = false;
+            for e in root.iter() {
+                commands.entity(e).despawn_recursive();
+            }
+        }
+    }
+}
+
+pub fn handle_hotbar_clicks(
+    mut interactions: Query<(&Interaction, &HotbarSlot), Changed<Interaction>>,
+    mut hotbar: ResMut<Hotbar>,
+    mut editor: ResMut<EditorState>,
+) {
+    for (interaction, slot) in interactions.iter_mut() {
+        if *interaction == Interaction::Pressed {
+            hotbar.selected = slot.0;
+            if let Some(tool) = hotbar.slots[slot.0] {
+                editor.tool = tool;
+            }
         }
     }
 }

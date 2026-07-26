@@ -46,13 +46,19 @@ fn main() {
         .init_resource::<ui::EditorState>()
         .init_resource::<ui::Selection>()
         .init_resource::<ui::Blueprint>()
-        .add_systems(Startup, (render::setup_scene, ui::setup_ghost))
+        .init_resource::<ui::Hotbar>()
+        .init_resource::<ui::BuildMenu>()
+        .add_systems(Startup, (render::setup_scene, ui::setup_ghost, ui::setup_hotbar))
         .add_systems(FixedUpdate, run_sim)
         .add_systems(
             Update,
             (
+                ui::handle_menu_input,
+                ui::handle_menu_clicks,
+                ui::handle_hotbar_clicks,
                 ui::handle_editor_input,
                 ui::save_load,
+                ui::update_hotbar,
                 render::rebuild_static_mesh,
                 render::build_dynamic_mesh,
                 render::camera_control,
