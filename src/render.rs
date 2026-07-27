@@ -273,24 +273,22 @@ pub fn setup_scene(
         bottom: Val::Px(92.0),
         ..default()
     }));
-    commands.spawn((
-        TextBundle::from_section(
-            "FORGE ASCENSION COMPLETE\nYour factory has forged a new industrial age.",
-            TextStyle {
-                font_size: 30.0,
-                color: Color::srgb(0.95, 0.78, 0.35),
-                ..default()
-            },
-        )
-        .with_style(Style {
-            position_type: PositionType::Absolute,
-            left: Val::Percent(24.0),
-            top: Val::Percent(40.0),
+    let mut victory_text = TextBundle::from_section(
+        "FORGE ASCENSION COMPLETE\nYour factory has forged a new industrial age.",
+        TextStyle {
+            font_size: 30.0,
+            color: Color::srgb(0.95, 0.78, 0.35),
             ..default()
-        }),
-        Visibility::Hidden,
-        VictoryOverlay,
-    ));
+        },
+    )
+    .with_style(Style {
+        position_type: PositionType::Absolute,
+        left: Val::Percent(24.0),
+        top: Val::Percent(40.0),
+        ..default()
+    });
+    victory_text.visibility = Visibility::Hidden;
+    commands.spawn((victory_text, VictoryOverlay));
 }
 
 pub fn update_victory_overlay(
