@@ -15,6 +15,7 @@ pub const TRAIN_SPEED: f32 = 0.4;
 pub struct RailNetwork {
     pub components: Vec<RailComponent>,
     pub trains: Vec<Train>,
+    paths: HashMap<(u32, u32), Vec<(i32, i32)>>,
 }
 
 pub struct RailComponent {
@@ -35,9 +36,6 @@ pub struct Train {
 
 #[derive(Component)]
 pub struct TrainSprite;
-
-#[derive(Resource, Default)]
-pub struct TrainEntities(pub Vec<Entity>);
 
 const NEIGHBOURS: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
 
@@ -86,6 +84,7 @@ fn path_between(track_positions: &HashSet<(i32, i32)>, start: (i32, i32), end: (
 impl RailNetwork {
     pub fn rebuild(&mut self, sim: &BeltSim, active_blds: &[usize]) {
         self.components.clear();
+        self.paths.clear();
         self.trains.retain(|t| sim.bld_active[t.from as usize] && sim.bld_active[t.to as usize]);
 
         let mut track_positions = Vec::new();
@@ -112,7 +111,7 @@ impl RailNetwork {
                 continue;
             }
             let mut comp_tracks = HashSet::new();
-            let mut comp_stations = Vec::new();
+            let comp_stations = Vec::new();
             let mut queue = VecDeque::new();
             queue.push_back(pos);
             component_map.insert(pos, components.len());
@@ -157,6 +156,7 @@ impl RailNetwork {
     }
 
     pub fn tick_trains(&mut self, sim: &mut BeltSim) {
+        let mut paths = std::mem::take(&mut self.paths);
         // Move existing trains.
         let mut arrived = Vec::new();
         for (idx, train) in self.trains.iter_mut().enumerate() {
@@ -221,7 +221,11 @@ impl RailNetwork {
 
                 let src_pos = pos_of(sim, src);
                 let dst_pos = pos_of(sim, dst);
-                let path = path_between(&comp.track_positions, src_pos, dst_pos);
+                let route = (src, dst);
+                let path = paths
+                    .entry(route)
+                    .or_insert_with(|| path_between(&comp.track_positions, src_pos, dst_pos))
+                    .clone();
                 if path.len() < 2 {
                     continue;
                 }
@@ -238,6 +242,7 @@ impl RailNetwork {
                 loaded_stations.insert(src);
             }
         }
+        self.paths = paths;
     }
 
     /// Current world-space position for a train, if any.
@@ -265,37 +270,37 @@ impl RailNetwork {
 pub fn update_train_visuals(
     mut commands: Commands,
     rail: Res<RailNetwork>,
-    existing: Query<Entity, With<TrainSprite>>,
-    mut entities: ResMut<TrainEntities>,
+    mut existing: Query<(Entity, &mut Transform, &mut Sprite), With<TrainSprite>>,
 ) {
-    // Clear old sprites.
-    for e in existing.iter() {
-        commands.entity(e).despawn();
-    }
-    entities.0.clear();
-
+    let mut sprites = existing.iter_mut();
     for train in &rail.trains {
         let Some(pos) = rail.train_position(train) else { continue };
         let color = match train.kind {
-            0 => Color::srgb(0.8, 0.3, 0.3),   // iron-ish
-            1 => Color::srgb(0.8, 0.5, 0.2),   // copper-ish
-            2 => Color::srgb(0.15, 0.15, 0.15), // coal
+            0 => Color::srgb(0.8, 0.3, 0.3),
+            1 => Color::srgb(0.8, 0.5, 0.2),
+            2 => Color::srgb(0.15, 0.15, 0.15),
             _ => Color::srgb(0.7, 0.7, 0.75),
         };
-        let entity = commands
-            .spawn((
+        let translation = Vec3::new(pos.x, pos.y, 3.0);
+        if let Some((_, mut transform, mut sprite)) = sprites.next() {
+            transform.translation = translation;
+            sprite.color = color;
+        } else {
+            commands.spawn((
                 SpriteBundle {
                     sprite: Sprite {
                         color,
                         custom_size: Some(Vec2::splat(TILE * 0.5)),
                         ..default()
                     },
-                    transform: Transform::from_translation(Vec3::new(pos.x, pos.y, 3.0)),
+                    transform: Transform::from_translation(translation),
                     ..default()
                 },
                 TrainSprite,
-            ))
-            .id();
-        entities.0.push(entity);
+            ));
+        }
+    }
+    for (entity, _, _) in sprites {
+        commands.entity(entity).despawn();
     }
 }

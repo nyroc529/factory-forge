@@ -1,6 +1,7 @@
 //! Fixed-timestep simulation: building production, advance pass, transfer pass.
 
 use rand::Rng;
+use std::collections::HashMap;
 
 use crate::belts::{BeltSim, BuildingKind, BELT_SPEED, INVALID, KINDS, LANES, MIN_SPACING};
 use crate::economy::RESEARCH_TIERS;
@@ -42,6 +43,17 @@ pub const RECIPES: &[Recipe] = &[
         input: [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         output_kind: 3,
         output_count: 1,
+        fluid_input: 0,
+        fluid_input_type: 0,
+        fluid_output: 0,
+        fluid_output_type: 0,
+    },
+    Recipe {
+        name: "fast gear",
+        ticks: 45,
+        input: [3, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+        output_kind: 3,
+        output_count: 2,
         fluid_input: 0,
         fluid_input_type: 0,
         fluid_output: 0,
@@ -95,6 +107,17 @@ pub const RECIPES: &[Recipe] = &[
         fluid_output: 0,
         fluid_output_type: 0,
     },
+    Recipe {
+        name: "efficient circuit",
+        ticks: 210,
+        input: [2, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0],
+        output_kind: 8,
+        output_count: 2,
+        fluid_input: 1,
+        fluid_input_type: 1,
+        fluid_output: 0,
+        fluid_output_type: 0,
+    },
     // Science pack: 1 steel + 1 plastic + 1 circuit -> 1 science
     Recipe {
         name: "science pack",
@@ -130,6 +153,8 @@ pub fn is_consumer(kind: BuildingKind) -> bool {
             | BuildingKind::Pump
             | BuildingKind::Lab
             | BuildingKind::RailStation
+            | BuildingKind::Turret
+            | BuildingKind::ForgeCore
     )
 }
 
@@ -147,6 +172,8 @@ pub fn is_power_node(kind: BuildingKind) -> bool {
             | BuildingKind::Splitter
             | BuildingKind::Pump
             | BuildingKind::RailStation
+            | BuildingKind::Turret
+            | BuildingKind::ForgeCore
     )
 }
 
@@ -189,16 +216,28 @@ pub fn rebuild_power(sim: &mut BeltSim, active_blds: &[usize]) {
         .collect();
     let n = nodes.len();
     let mut uf = UnionFind::new(n);
-    for i in 0..n {
-        let a = nodes[i];
-        for j in (i + 1)..n {
-            let b = nodes[j];
-            let dx = (sim.bld_x[a] - sim.bld_x[b]) as f32;
-            let dy = (sim.bld_y[a] - sim.bld_y[b]) as f32;
-            if dx * dx + dy * dy <= POWER_RADIUS2 {
-                uf.union(i, j);
+    let cell_size = POWER_RADIUS as i32;
+    let mut buckets: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
+    for (idx, &s) in nodes.iter().enumerate() {
+        let cell = (
+            sim.bld_x[s].div_euclid(cell_size),
+            sim.bld_y[s].div_euclid(cell_size),
+        );
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                if let Some(neighbours) = buckets.get(&(cell.0 + dx, cell.1 + dy)) {
+                    for &other_idx in neighbours {
+                        let other = nodes[other_idx];
+                        let delta_x = (sim.bld_x[s] - sim.bld_x[other]) as f32;
+                        let delta_y = (sim.bld_y[s] - sim.bld_y[other]) as f32;
+                        if delta_x * delta_x + delta_y * delta_y <= POWER_RADIUS2 {
+                            uf.union(idx, other_idx);
+                        }
+                    }
+                }
             }
         }
+        buckets.entry(cell).or_default().push(idx);
     }
 
     let mut supply = vec![0.0f32; n];
@@ -268,14 +307,17 @@ pub fn rebuild_fluid_networks(sim: &mut BeltSim, active_blds: &[usize], root_map
         .collect();
     let n = nodes.len();
     let mut uf = UnionFind::new(n);
-    for i in 0..n {
-        let a = nodes[i];
-        for j in (i + 1)..n {
-            let b = nodes[j];
-            let dx = sim.bld_x[a] - sim.bld_x[b];
-            let dy = sim.bld_y[a] - sim.bld_y[b];
-            if dx.abs() + dy.abs() == 1 {
-                uf.union(i, j);
+    let positions: HashMap<(i32, i32), usize> = nodes
+        .iter()
+        .enumerate()
+        .map(|(idx, &s)| ((sim.bld_x[s], sim.bld_y[s]), idx))
+        .collect();
+    for (idx, &s) in nodes.iter().enumerate() {
+        let x = sim.bld_x[s];
+        let y = sim.bld_y[s];
+        for neighbour in [(x + 1, y), (x, y + 1)] {
+            if let Some(&other_idx) = positions.get(&neighbour) {
+                uf.union(idx, other_idx);
             }
         }
     }
@@ -484,6 +526,32 @@ fn drop_to_building(sim: &mut BeltSim, bld: u32, kind: u16) -> bool {
                 false
             }
         }
+        BuildingKind::Turret => {
+            if (k == 4 || k == 8) && sim.bld_in[b][k] < STORAGE_CAP {
+                sim.bld_in[b][k] += 1;
+                true
+            } else {
+                false
+            }
+        }
+        BuildingKind::ForgeCore => {
+            let stage = sim.bld_param[b] as usize;
+            let requirements = [(4usize, 50u32), (8usize, 50u32), (10usize, 20u32)];
+            if let Some(&(required_kind, required_count)) = requirements.get(stage) {
+                if k == required_kind && sim.bld_delivered[b] < required_count {
+                    sim.bld_delivered[b] += 1;
+                    if sim.bld_delivered[b] == required_count {
+                        sim.bld_param[b] += 1;
+                        sim.bld_delivered[b] = 0;
+                    }
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        }
         BuildingKind::Shipment => {
             let target = sim.bld_param[b] as usize;
             if k == target && sim.bld_delivered[b] < u32::MAX {
@@ -573,7 +641,7 @@ pub fn tick_buildings(sim: &mut BeltSim, grid: &Grid, active_blds: &[usize]) {
             }
             BuildingKind::Storage => {}
             BuildingKind::Shipment => {}
-            BuildingKind::RailTrack | BuildingKind::RailStation | BuildingKind::Turret => {}
+            BuildingKind::RailTrack | BuildingKind::RailStation | BuildingKind::Turret | BuildingKind::ForgeCore => {}
             BuildingKind::Splitter => {
                 if sim.bld_timer[s] > 0 {
                     sim.bld_timer[s] -= 1;
@@ -722,7 +790,10 @@ mod tests {
         let _pipe = sim.add_building(3, 0, Dir::East, BuildingKind::Pipe);
         let tank = sim.add_building(4, 0, Dir::East, BuildingKind::Tank);
         let asm = sim.add_building(5, 0, Dir::East, BuildingKind::Assembler);
-        sim.bld_param[asm as usize] = 2; // water alloy: 1 amber + 1 water -> 1 violet
+        sim.bld_param[asm as usize] = RECIPES
+            .iter()
+            .position(|recipe| recipe.name == "water steel")
+            .expect("water steel recipe") as u16;
         sim.bld_in[asm as usize][0] = 20; // preload amber
 
         let active_blds: Vec<usize> = (0..sim.bld_x.len())

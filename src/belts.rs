@@ -52,6 +52,7 @@ pub enum BuildingKind {
     RailTrack,
     RailStation,
     Turret,
+    ForgeCore,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]

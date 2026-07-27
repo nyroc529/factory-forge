@@ -2,13 +2,14 @@
 //! erase with right-click. A ghost sprite previews the placement.
 
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::belts::{BuildingKind, Dir, INVALID};
 use crate::render::{dir_angle, WorldDirty, TILE};
 use crate::sim::rebuild_belt_graph;
 use crate::economy::{
-    is_tool_unlocked, tech_for_tool, tool_category, tool_info, unlock_tech, PlayerState, Tech,
-    ToolCategory,
+    is_tool_unlocked, tech_for_tool, tool_category, tool_info, unlock_tech, ContractState, PlayerState,
+    ProductionStats, Tech, ToolCategory, VictoryState,
 };
 use crate::{GameWorld, Sim};
 
@@ -61,6 +62,9 @@ pub struct MenuItem(pub Tool);
 
 #[derive(Component)]
 pub struct MenuUnlock(pub Tech);
+
+#[derive(Component)]
+pub struct MenuContract(pub u16);
 
 #[derive(Component)]
 pub struct MenuRoot;
@@ -144,6 +148,7 @@ pub enum Tool {
     RailTrack,
     RailStation,
     Turret,
+    ForgeCore,
 }
 
 impl From<BuildingKind> for Tool {
@@ -166,6 +171,7 @@ impl From<BuildingKind> for Tool {
             BuildingKind::RailTrack => Tool::RailTrack,
             BuildingKind::RailStation => Tool::RailStation,
             BuildingKind::Turret => Tool::Turret,
+            BuildingKind::ForgeCore => Tool::ForgeCore,
         }
     }
 }
@@ -216,6 +222,7 @@ impl EditorState {
             Tool::RailTrack => "rail track",
             Tool::RailStation => "rail station",
             Tool::Turret => "turret",
+            Tool::ForgeCore => "forge core",
         }
     }
 }
@@ -244,6 +251,7 @@ pub fn tool_color(tool: Tool) -> Color {
         Tool::RailTrack => Color::srgb(0.25, 0.25, 0.28),
         Tool::RailStation => Color::srgb(0.45, 0.35, 0.25),
         Tool::Turret => Color::srgb(0.65, 0.25, 0.25),
+        Tool::ForgeCore => Color::srgb(0.85, 0.35, 0.75),
     }
 }
 
@@ -288,6 +296,7 @@ pub fn tool_label(tool: Tool) -> &'static str {
         Tool::RailTrack => "rail",
         Tool::RailStation => "station",
         Tool::Turret => "turret",
+        Tool::ForgeCore => "core",
     }
 }
 
@@ -701,6 +710,13 @@ pub fn handle_editor_input(
                     changed = true;
                 }
             }
+            Tool::ForgeCore => {
+                if free && try_pay(tool_cost(Tool::ForgeCore), player) {
+                    let id = sim.0.add_building(tx, ty, editor.dir, BuildingKind::ForgeCore);
+                    world.0.set_building(tx, ty, id);
+                    changed = true;
+                }
+            }
             _ => {}
         }
     }
@@ -791,15 +807,39 @@ fn copy_blueprint(
 
 const SAVE_PATH: &str = "factory.save";
 
-/// F5 saves the whole world (flat arrays serialize directly); F9 loads it.
+#[derive(Serialize, Deserialize)]
+struct SaveGame {
+    sim: crate::belts::BeltSim,
+    grid: crate::grid::Grid,
+    player: PlayerState,
+    contract: ContractState,
+    stats: ProductionStats,
+    #[serde(default)]
+    victory: VictoryState,
+}
+
 pub fn save_load(
     keys: Res<ButtonInput<KeyCode>>,
     mut sim: ResMut<Sim>,
     mut world: ResMut<GameWorld>,
+    mut player: ResMut<PlayerState>,
+    mut contract: ResMut<ContractState>,
+    mut stats: ResMut<ProductionStats>,
+    mut victory: ResMut<VictoryState>,
+    mut rail: ResMut<crate::rail::RailNetwork>,
+    mut combat: ResMut<crate::combat::CombatState>,
     mut dirty: ResMut<WorldDirty>,
 ) {
     if keys.just_pressed(KeyCode::F5) {
-        match bincode::serialize(&(&sim.0, &world.0)) {
+        let save = SaveGame {
+            sim: sim.0.clone(),
+            grid: world.0.clone(),
+            player: player.clone(),
+            contract: contract.clone(),
+            stats: stats.clone(),
+            victory: victory.clone(),
+        };
+        match bincode::serialize(&save) {
             Ok(bytes) => {
                 if let Err(e) = std::fs::write(SAVE_PATH, bytes) {
                     error!("save failed: {e}");
@@ -811,17 +851,32 @@ pub fn save_load(
         }
     }
     if keys.just_pressed(KeyCode::F9) {
-        match std::fs::read(SAVE_PATH) {
-            Ok(bytes) => match bincode::deserialize::<(crate::belts::BeltSim, crate::grid::Grid)>(&bytes) {
-                Ok((s, g)) => {
-                    sim.0 = s;
-                    sim.0.dirty_power = true;
-                    world.0 = g;
-                    dirty.0 = true;
-                    info!("loaded {SAVE_PATH}");
+        let loaded = std::fs::read(SAVE_PATH).and_then(|bytes| {
+            bincode::deserialize::<SaveGame>(&bytes)
+                .map(|save| (save.sim, save.grid, Some((save.player, save.contract, save.stats, save.victory))))
+                .or_else(|_| {
+                    bincode::deserialize::<(crate::belts::BeltSim, crate::grid::Grid)>(&bytes)
+                        .map(|(sim, grid)| (sim, grid, None))
+                })
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        });
+        match loaded {
+            Ok((saved_sim, saved_grid, saved_player)) => {
+                sim.0 = saved_sim;
+                sim.0.dirty_power = true;
+                sim.0.dirty_rail = true;
+                world.0 = saved_grid;
+                if let Some((saved_player, saved_contract, saved_stats, saved_victory)) = saved_player {
+                    *player = saved_player;
+                    *contract = saved_contract;
+                    *stats = saved_stats;
+                    *victory = saved_victory;
                 }
-                Err(e) => error!("deserialize failed: {e}"),
-            },
+                *rail = crate::rail::RailNetwork::default();
+                *combat = crate::combat::CombatState::default();
+                dirty.0 = true;
+                info!("loaded {SAVE_PATH}");
+            }
             Err(e) => error!("load failed: {e}"),
         }
     }
@@ -1015,6 +1070,53 @@ fn menu_button(parent: &mut ChildBuilder, tool: Tool, player: &PlayerState) {
         });
 }
 
+fn contract_button(parent: &mut ChildBuilder, item_kind: u16, contract: &ContractState) {
+    let selected = contract.item_kind == item_kind;
+    let disabled = contract.delivered > 0;
+    let required = crate::economy::contract_requirement(item_kind, contract.completed);
+    parent
+        .spawn((
+            ButtonBundle {
+                style: Style {
+                    width: Val::Px(130.0),
+                    height: Val::Px(54.0),
+                    margin: UiRect::all(Val::Px(4.0)),
+                    padding: UiRect::all(Val::Px(4.0)),
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                background_color: if selected {
+                    Color::srgb(0.18, 0.48, 0.38).into()
+                } else if disabled {
+                    Color::srgb(0.16, 0.17, 0.2).into()
+                } else {
+                    Color::srgb(0.22, 0.28, 0.38).into()
+                },
+                ..default()
+            },
+            MenuContract(item_kind),
+        ))
+        .with_children(|p| {
+            p.spawn(TextBundle::from_section(
+                format!("Contract: {}", crate::belts::ITEM_NAMES[item_kind as usize]),
+                TextStyle {
+                    font_size: 10.0,
+                    color: Color::srgb(0.95, 0.95, 0.95),
+                    ..default()
+                },
+            ));
+            p.spawn(TextBundle::from_section(
+                format!("{} units  +{} RP", required, 25 + contract.completed as i32 * 10),
+                TextStyle {
+                    font_size: 9.0,
+                    color: Color::srgb(0.7, 0.84, 0.96),
+                    ..default()
+                },
+            ));
+        });
+}
+
 fn menu_category(
     parent: &mut ChildBuilder,
     category: ToolCategory,
@@ -1078,6 +1180,7 @@ pub fn open_build_menu(
     mut commands: Commands,
     hotbar: &Hotbar,
     player: &PlayerState,
+    contract: &ContractState,
 ) {
     let selected_label = hotbar
         .slots[hotbar.selected]
@@ -1106,6 +1209,7 @@ pub fn open_build_menu(
         Tool::RailTrack,
         Tool::RailStation,
         Tool::Turret,
+        Tool::ForgeCore,
     ];
     let groups = collect_by_category(ALL_TOOLS);
     commands
@@ -1138,7 +1242,22 @@ pub fn open_build_menu(
             root.spawn(NodeBundle {
                 style: Style {
                     position_type: PositionType::Absolute,
-                    top: Val::Px(60.0),
+                    top: Val::Px(44.0),
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                ..default()
+            })
+            .with_children(|contracts| {
+                for item_kind in crate::economy::CONTRACT_ITEMS {
+                    contract_button(contracts, item_kind, contract);
+                }
+            });
+            root.spawn(NodeBundle {
+                style: Style {
+                    position_type: PositionType::Absolute,
+                    top: Val::Px(110.0),
                     flex_direction: FlexDirection::Column,
                     align_items: AlignItems::Center,
                     ..default()
@@ -1160,6 +1279,7 @@ pub fn handle_menu_input(
     root: Query<Entity, With<MenuRoot>>,
     hotbar: Res<Hotbar>,
     player: Res<PlayerState>,
+    contract: Res<ContractState>,
 ) {
     let toggle = keys.just_pressed(KeyCode::KeyQ) || keys.just_pressed(KeyCode::Tab);
     let close = keys.just_pressed(KeyCode::Escape);
@@ -1175,7 +1295,7 @@ pub fn handle_menu_input(
         commands.entity(e).despawn_recursive();
     }
     if menu.visible {
-        open_build_menu(commands, &hotbar, &player);
+        open_build_menu(commands, &hotbar, &player, &contract);
     }
 }
 
@@ -1204,6 +1324,17 @@ pub fn handle_menu_clicks(
             for e in root.iter() {
                 commands.entity(e).despawn_recursive();
             }
+        }
+    }
+}
+
+pub fn handle_menu_contracts(
+    mut interactions: Query<(&Interaction, &MenuContract), Changed<Interaction>>,
+    mut contract: ResMut<ContractState>,
+) {
+    for (interaction, offer) in interactions.iter_mut() {
+        if *interaction == Interaction::Pressed {
+            contract.select(offer.0);
         }
     }
 }

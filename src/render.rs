@@ -15,7 +15,8 @@ use bevy::render::view::NoFrustumCulling;
 use bevy::sprite::{MaterialMesh2dBundle, Mesh2dHandle};
 
 use crate::belts::{BeltSim, BuildingKind, Dir, INVALID, ITEM_NAMES};
-use crate::economy::PlayerState;
+use crate::combat::CombatState;
+use crate::economy::{ContractState, PlayerState, ProductionStats, VictoryState};
 use crate::sim::{INSERTER_COOLDOWN, RECIPES, is_consumer, is_power_node, POWER_RADIUS2};
 use crate::ui::{Blueprint, EditorState, Selection};
 use crate::{GameWorld, Sim};
@@ -182,6 +183,9 @@ pub struct CameraTarget {
 #[derive(Component)]
 pub struct Hud;
 
+#[derive(Component)]
+pub struct VictoryOverlay;
+
 // -------------------------------------------------------------------- setup
 
 pub fn setup_scene(
@@ -255,6 +259,54 @@ pub fn setup_scene(
         }),
         Hud,
     ));
+    commands.spawn(TextBundle::from_section(
+        "OUTPOST ZONES  |  NE: Oil Basin  |  SE: Copper Expanse  |  SW: Coal Frontier\nSecure remote mines with turrets; connect them by rail.",
+        TextStyle {
+            font_size: 13.0,
+            color: Color::srgb(0.55, 0.7, 0.82),
+            ..default()
+        },
+    )
+    .with_style(Style {
+        position_type: PositionType::Absolute,
+        left: Val::Px(12.0),
+        bottom: Val::Px(92.0),
+        ..default()
+    }));
+    commands.spawn((
+        TextBundle::from_section(
+            "FORGE ASCENSION COMPLETE\nYour factory has forged a new industrial age.",
+            TextStyle {
+                font_size: 30.0,
+                color: Color::srgb(0.95, 0.78, 0.35),
+                ..default()
+            },
+        )
+        .with_style(Style {
+            position_type: PositionType::Absolute,
+            left: Val::Percent(24.0),
+            top: Val::Percent(40.0),
+            ..default()
+        }),
+        Visibility::Hidden,
+        VictoryOverlay,
+    ));
+}
+
+pub fn update_victory_overlay(
+    victory: Res<VictoryState>,
+    mut overlay: Query<&mut Visibility, With<VictoryOverlay>>,
+) {
+    if !victory.is_changed() {
+        return;
+    }
+    for mut visibility in overlay.iter_mut() {
+        *visibility = if victory.achieved {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
 }
 
 // ------------------------------------------------------------------ systems
@@ -353,6 +405,7 @@ pub fn rebuild_static_mesh(
             BuildingKind::RailTrack => lin(Color::srgb(0.25, 0.25, 0.28)),
             BuildingKind::RailStation => lin(Color::srgb(0.45, 0.35, 0.25)),
             BuildingKind::Turret => lin(Color::srgb(0.65, 0.25, 0.25)),
+            BuildingKind::ForgeCore => lin(Color::srgb(0.85, 0.35, 0.75)),
         };
         batch.quad(c, half, half, 0.0, body);
         // Direction notch on the output/input edge.
@@ -684,6 +737,9 @@ pub fn update_hud(
     blueprint: Res<Blueprint>,
     diagnostics: Res<DiagnosticsStore>,
     player: Res<PlayerState>,
+    contract: Res<ContractState>,
+    stats: Res<ProductionStats>,
+    combat: Res<CombatState>,
     mut q: Query<&mut Text, With<Hud>>,
     mut counter: Local<u32>,
 ) {
@@ -758,9 +814,21 @@ pub fn update_hud(
     } else {
         String::new()
     };
+    let most_shipped = stats
+        .shipped
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, count)| *count)
+        .filter(|(_, count)| **count > 0)
+        .map(|(kind, count)| format!("  top ship: {} {}", ITEM_NAMES[kind], count))
+        .unwrap_or_default();
+    let forge_progress = (0..sim.0.bld_x.len())
+        .find(|&i| sim.0.bld_active[i] && sim.0.bld_kind[i] == BuildingKind::ForgeCore)
+        .map(|i| format!("  forge: stage {} delivery {}", sim.0.bld_param[i] + 1, sim.0.bld_delivered[i]))
+        .unwrap_or_default();
     if let Ok(mut text) = q.get_single_mut() {
         text.sections[0].value = format!(
-            "credits: ${}  research: {}  items: {}  fps: {:.0}  tool: {} ({:?}){}\n{}",
+            "credits: ${}  research: {}  items: {}  fps: {:.0}  tool: {} ({:?}){}\ncontract: {} {}/{}  completed: {}{}\nthreat: {:.1}  wave: {}{}\n{}",
             player.credits,
             player.research_points,
             sim.0.active_item_count(),
@@ -768,6 +836,14 @@ pub fn update_hud(
             editor.tool_name(),
             editor.dir,
             recipe_hint,
+            ITEM_NAMES[contract.item_kind as usize % ITEM_NAMES.len()],
+            contract.delivered,
+            contract.required,
+            contract.completed,
+            most_shipped,
+            combat.threat,
+            combat.wave,
+            forge_progress,
             inspect,
         );
     }

@@ -1,4 +1,5 @@
 mod belts;
+mod combat;
 mod economy;
 mod grid;
 mod rail;
@@ -10,10 +11,11 @@ use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::prelude::*;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use std::collections::HashSet;
-
 use belts::{BeltSim, BuildingKind, Dir, KINDS};
-use economy::{item_value, shipment_value, PlayerState};
+use economy::{
+    is_tech_unlocked, item_value, shipment_value, ContractState, PlayerState, ProductionStats, Tech,
+    VictoryState,
+};
 use grid::{Grid, CHUNK_SIZE};
 use render::{CameraTarget, TILE};
 
@@ -23,6 +25,17 @@ pub struct Sim(pub BeltSim);
 
 #[derive(Resource)]
 pub struct GameWorld(pub Grid);
+
+#[derive(Default)]
+struct FluidScratch {
+    roots: Vec<u32>,
+    cap: Vec<f32>,
+    vol: Vec<f32>,
+    prod: Vec<f32>,
+    cons: Vec<f32>,
+    ready: Vec<bool>,
+    net_count: usize,
+}
 
 fn main() {
     let (sim, grid) = build_demo_world();
@@ -47,13 +60,16 @@ fn main() {
         .insert_resource(GameWorld(grid))
         .insert_resource(history)
         .insert_resource(economy::PlayerState::with_starting_funds())
+        .init_resource::<ContractState>()
+        .init_resource::<ProductionStats>()
+        .init_resource::<VictoryState>()
         .init_resource::<ui::EditorState>()
         .init_resource::<ui::Selection>()
         .init_resource::<ui::Blueprint>()
         .init_resource::<ui::Hotbar>()
         .init_resource::<ui::BuildMenu>()
         .init_resource::<rail::RailNetwork>()
-        .init_resource::<rail::TrainEntities>()
+        .init_resource::<combat::CombatState>()
         .add_systems(Startup, (render::setup_scene, ui::setup_ghost, ui::setup_hotbar))
         .add_systems(FixedUpdate, run_sim)
         .add_systems(
@@ -61,6 +77,7 @@ fn main() {
             (
                 ui::handle_menu_input,
                 ui::handle_menu_clicks,
+                ui::handle_menu_contracts,
                 ui::handle_menu_unlocks,
                 ui::handle_hotbar_clicks,
                 ui::handle_editor_input,
@@ -71,7 +88,9 @@ fn main() {
                 render::camera_control,
                 render::toggle_bloom,
                 render::update_hud,
+                render::update_victory_overlay,
                 rail::update_train_visuals,
+                combat::update_enemy_visuals,
             )
                 .chain(),
         )
@@ -80,62 +99,74 @@ fn main() {
 
 fn run_sim(
     mut sim: ResMut<Sim>,
-    world: Res<GameWorld>,
+    mut world: ResMut<GameWorld>,
     target: Res<CameraTarget>,
     mut rail: ResMut<rail::RailNetwork>,
+    mut combat: ResMut<combat::CombatState>,
     mut player: ResMut<PlayerState>,
-    mut active_chunks: Local<HashSet<(i32, i32)>>,
+    mut contract: ResMut<ContractState>,
+    mut stats: ResMut<ProductionStats>,
+    mut victory: ResMut<VictoryState>,
+    mut world_dirty: ResMut<render::WorldDirty>,
     mut active_belts: Local<Vec<usize>>,
     mut active_blds: Local<Vec<usize>>,
-    mut fluid_roots: Local<Vec<u32>>,
-    mut fluid_cap: Local<Vec<f32>>,
-    mut fluid_vol: Local<Vec<f32>>,
-    mut fluid_prod: Local<Vec<f32>>,
-    mut fluid_cons: Local<Vec<f32>>,
-    mut fluid_ready: Local<Vec<bool>>,
-    mut fluid_net_count: Local<usize>,
+    mut fluids: Local<FluidScratch>,
 ) {
-    active_chunks.clear();
     let cx = (target.pos.x / (TILE * CHUNK_SIZE as f32)).floor() as i32;
     let cy = (target.pos.y / (TILE * CHUNK_SIZE as f32)).floor() as i32;
-    for dy in -1..=1 {
-        for dx in -1..=1 {
-            active_chunks.insert((cx + dx, cy + dy));
-        }
-    }
+    let min_chunk_x = cx - 1;
+    let max_chunk_x = cx + 1;
+    let min_chunk_y = cy - 1;
+    let max_chunk_y = cy + 1;
     active_belts.clear();
-    active_belts.extend(
-        (0..sim.0.belt_count())
-            .filter(|&b| sim.0.belt_active[b] && active_chunks.contains(&sim.0.belt_chunk[b])),
-    );
+    active_belts.extend((0..sim.0.belt_count()).filter(|&b| {
+        let (x, y) = sim.0.belt_chunk[b];
+        sim.0.belt_active[b]
+            && x >= min_chunk_x
+            && x <= max_chunk_x
+            && y >= min_chunk_y
+            && y <= max_chunk_y
+    }));
     active_blds.clear();
-    active_blds.extend(
-        (0..sim.0.bld_x.len())
-            .filter(|&s| sim.0.bld_active[s] && active_chunks.contains(&sim.0.bld_chunk[s])),
-    );
+    active_blds.extend((0..sim.0.bld_x.len()).filter(|&s| {
+        let (x, y) = sim.0.bld_chunk[s];
+        sim.0.bld_active[s]
+            && x >= min_chunk_x
+            && x <= max_chunk_x
+            && y >= min_chunk_y
+            && y <= max_chunk_y
+    }));
     let net_count = if sim.0.dirty_power {
         sim::rebuild_power(&mut sim.0, &active_blds);
-        let count = sim::rebuild_fluid_networks(&mut sim.0, &active_blds, &mut fluid_roots);
+        let count = sim::rebuild_fluid_networks(&mut sim.0, &active_blds, &mut fluids.roots);
         sim.0.dirty_power = false;
-        *fluid_net_count = count;
+        fluids.net_count = count;
         count
     } else {
-        *fluid_net_count
+        fluids.net_count
     };
-    fluid_cap.resize(net_count, 0.0);
-    fluid_vol.resize(net_count, 0.0);
-    fluid_prod.resize(net_count, 0.0);
-    fluid_cons.resize(net_count, 0.0);
-    fluid_ready.resize(net_count, false);
+    fluids.cap.resize(net_count, 0.0);
+    fluids.vol.resize(net_count, 0.0);
+    fluids.prod.resize(net_count, 0.0);
+    fluids.cons.resize(net_count, 0.0);
+    fluids.ready.resize(net_count, false);
+    let FluidScratch {
+        cap,
+        vol,
+        prod,
+        cons,
+        ready,
+        ..
+    } = &mut *fluids;
     sim::tick_fluids(
         &mut sim.0,
         &active_blds,
         net_count,
-        &mut fluid_cap,
-        &mut fluid_vol,
-        &mut fluid_prod,
-        &mut fluid_cons,
-        &mut fluid_ready,
+        cap,
+        vol,
+        prod,
+        cons,
+        ready,
     );
     sim::tick_buildings(&mut sim.0, &world.0, &active_blds);
     sim::tick(&mut sim.0, &active_belts);
@@ -145,16 +176,49 @@ fn run_sim(
         sim.0.dirty_rail = false;
     }
     rail.tick_trains(&mut sim.0);
+    let factory_load = active_blds
+        .iter()
+        .filter(|&&s| {
+            sim.0.bld_powered[s]
+                && matches!(
+                    sim.0.bld_kind[s],
+                    BuildingKind::Assembler | BuildingKind::Miner | BuildingKind::Generator | BuildingKind::Lab
+                )
+        })
+        .count();
+    if combat.tick(
+        &mut sim.0,
+        &mut world.0,
+        &active_blds,
+        factory_load,
+        is_tech_unlocked(player.tech_flags, Tech::Combat),
+    ) {
+        world_dirty.0 = true;
+    }
+
+    if !victory.achieved
+        && active_blds.iter().any(|&s| {
+            sim.0.bld_active[s]
+                && sim.0.bld_kind[s] == BuildingKind::ForgeCore
+                && sim.0.bld_param[s] >= 3
+        })
+    {
+        victory.achieved = true;
+    }
 
     // Economy: sinks sell stored items, shipments pay for target deliveries,
     // and research centers convert consumed fuel into research points.
     for &s in active_blds.iter() {
+        if !sim.0.bld_active[s] {
+            continue;
+        }
         match sim.0.bld_kind[s] {
             BuildingKind::Sink => {
                 for k in 0..KINDS {
                     let n = sim.0.bld_in[s][k];
                     if n > 0 {
                         player.credits += n as i32 * item_value(k as u16);
+                        stats.record_sale(k, n);
                         sim.0.bld_in[s][k] = 0;
                     }
                 }
@@ -164,6 +228,8 @@ fn run_sim(
                 let delivered = sim.0.bld_delivered[s];
                 if delivered > 0 && target < KINDS {
                     player.credits += delivered as i32 * shipment_value(target as u16);
+                    stats.record_shipment(target, delivered);
+                    contract.record_delivery(target as u16, delivered, &mut player);
                     sim.0.bld_delivered[s] = 0;
                 }
             }
@@ -184,7 +250,7 @@ fn run_sim(
 fn build_demo_world() -> (BeltSim, Grid) {
     let mut rng = StdRng::seed_from_u64(0xF4C70_1DEA);
     let mut sim = BeltSim::default();
-    let mut grid = Grid::new(120, 120);
+    let mut grid = Grid::new(160, 160);
 
     generate_ore_patches(&mut grid, &mut rng);
 
@@ -260,6 +326,21 @@ fn generate_ore_patches(grid: &mut Grid, rng: &mut StdRng) {
         for x in 8..=12 {
             if (x - 10) * (x - 10) + (y - 10) * (y - 10) <= 8 {
                 grid.set_ore(x, y, 1);
+            }
+        }
+    }
+    stamp_ore_zone(grid, 130, 26, 7, 7);
+    stamp_ore_zone(grid, 130, 130, 8, 2);
+    stamp_ore_zone(grid, 26, 130, 8, 3);
+}
+
+fn stamp_ore_zone(grid: &mut Grid, cx: i32, cy: i32, radius: i32, kind: u8) {
+    for y in (cy - radius)..=(cy + radius) {
+        for x in (cx - radius)..=(cx + radius) {
+            let dx = x - cx;
+            let dy = y - cy;
+            if dx * dx + dy * dy <= radius * radius {
+                grid.set_ore(x, y, kind);
             }
         }
     }

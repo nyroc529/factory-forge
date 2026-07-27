@@ -1,12 +1,13 @@
 //! Economy, costs, and research-point model.
 
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::ui::Tool;
 use crate::belts::KINDS;
 
 /// Player wallet and progression currency.
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone, Serialize, Deserialize)]
 pub struct PlayerState {
     pub credits: i32,
     pub research_points: i32,
@@ -21,6 +22,84 @@ impl PlayerState {
             tech_flags: 0,
         }
     }
+}
+
+#[derive(Resource, Clone, Serialize, Deserialize)]
+pub struct ContractState {
+    pub item_kind: u16,
+    pub delivered: u32,
+    pub required: u32,
+    pub completed: u32,
+}
+
+impl Default for ContractState {
+    fn default() -> Self {
+        Self {
+            item_kind: 3,
+            delivered: 0,
+            required: 40,
+            completed: 0,
+        }
+    }
+}
+
+pub const CONTRACT_ITEMS: [u16; 3] = [3, 8, 10];
+
+pub const fn contract_requirement(kind: u16, completed: u32) -> u32 {
+    let base = match kind {
+        3 => 60,
+        8 => 30,
+        10 => 12,
+        _ => 40,
+    };
+    base + completed * 10
+}
+
+impl ContractState {
+    pub fn select(&mut self, item_kind: u16) {
+        if CONTRACT_ITEMS.contains(&item_kind) && self.delivered == 0 {
+            self.item_kind = item_kind;
+            self.required = contract_requirement(item_kind, self.completed);
+        }
+    }
+
+    pub fn record_delivery(&mut self, kind: u16, count: u32, player: &mut PlayerState) {
+        if kind != self.item_kind {
+            return;
+        }
+        self.delivered = self.delivered.saturating_add(count);
+        if self.delivered < self.required {
+            return;
+        }
+        player.credits += item_value(self.item_kind) * self.required as i32 * 2;
+        player.research_points += 25 + self.completed as i32 * 10;
+        self.completed += 1;
+        let stage = self.completed % CONTRACT_ITEMS.len() as u32;
+        self.item_kind = CONTRACT_ITEMS[stage as usize];
+        self.required = contract_requirement(self.item_kind, self.completed);
+        self.delivered = 0;
+    }
+}
+
+#[derive(Resource, Default, Clone, Serialize, Deserialize)]
+pub struct ProductionStats {
+    pub sold: [u64; KINDS],
+    pub shipped: [u64; KINDS],
+}
+
+impl ProductionStats {
+    pub fn record_sale(&mut self, kind: usize, count: u16) {
+        self.sold[kind] += count as u64;
+    }
+
+    pub fn record_shipment(&mut self, kind: usize, count: u32) {
+        self.shipped[kind] += count as u64;
+    }
+}
+
+#[derive(Resource, Default, Clone, Serialize, Deserialize)]
+pub struct VictoryState {
+    pub achieved: bool,
 }
 
 /// A price tag for placing a tool. For now costs are credits-only;
@@ -154,8 +233,13 @@ const INFO_RAILSTATION: ToolInfo = ToolInfo {
 };
 const INFO_TURRET: ToolInfo = ToolInfo {
     name: "Turret",
-    description: "Automatically targets enemies within range.",
+    description: "Powered defense. Feed circuits as ammo and steel for repairs.",
     cost: Cost { credits: 250 },
+};
+const INFO_FORGECORE: ToolInfo = ToolInfo {
+    name: "Forge Core",
+    description: "Endgame project. Deliver steel, circuits, then science packs.",
+    cost: Cost { credits: 5000 },
 };
 
 /// How much money the player receives for shipping one of an item kind.
@@ -211,6 +295,7 @@ pub fn tool_info(tool: Tool) -> &'static ToolInfo {
         Tool::RailTrack => &INFO_RAILTRACK,
         Tool::RailStation => &INFO_RAILSTATION,
         Tool::Turret => &INFO_TURRET,
+        Tool::ForgeCore => &INFO_FORGECORE,
     }
 }
 
@@ -252,6 +337,7 @@ pub fn tool_category(tool: Tool) -> ToolCategory {
         Tool::Research1 | Tool::Research2 | Tool::Research3 => ToolCategory::Production,
         Tool::RailTrack | Tool::RailStation => ToolCategory::Rail,
         Tool::Turret => ToolCategory::Combat,
+        Tool::ForgeCore => ToolCategory::Production,
         Tool::Select | Tool::Paste => ToolCategory::Tools,
     }
 }
@@ -298,6 +384,7 @@ pub enum Tech {
     AdvancedResearch,
     RailLogistics,
     Combat,
+    ForgeCore,
 }
 
 impl Tech {
@@ -309,6 +396,7 @@ impl Tech {
             Tech::AdvancedResearch => 3,
             Tech::RailLogistics => 4,
             Tech::Combat => 5,
+            Tech::ForgeCore => 6,
         }
     }
 
@@ -320,6 +408,7 @@ impl Tech {
             Tech::AdvancedResearch => 300,
             Tech::RailLogistics => 500,
             Tech::Combat => 400,
+            Tech::ForgeCore => 1200,
         }
     }
 
@@ -331,6 +420,7 @@ impl Tech {
             Tech::AdvancedResearch => "Advanced Research",
             Tech::RailLogistics => "Rail Logistics",
             Tech::Combat => "Defensive Systems",
+            Tech::ForgeCore => "Forge Ascension",
         }
     }
 
@@ -342,6 +432,7 @@ impl Tech {
             Tech::AdvancedResearch => "Unlocks Research Center T2 and T3.",
             Tech::RailLogistics => "Unlocks rail tracks and train stations.",
             Tech::Combat => "Unlocks turrets for base defense.",
+            Tech::ForgeCore => "Unlocks the staged Forge Core endgame project.",
         }
     }
 }
@@ -355,6 +446,7 @@ pub const fn tech_for_tool(tool: Tool) -> Option<Tech> {
         Tool::Research2 | Tool::Research3 => Some(Tech::AdvancedResearch),
         Tool::RailTrack | Tool::RailStation => Some(Tech::RailLogistics),
         Tool::Turret => Some(Tech::Combat),
+        Tool::ForgeCore => Some(Tech::ForgeCore),
         Tool::Select | Tool::Paste | Tool::Belt | Tool::Inserter | Tool::Source | Tool::Sink
         | Tool::Assembler | Tool::Miner | Tool::Storage | Tool::Pole | Tool::Pipe
         | Tool::Research1 => None,
