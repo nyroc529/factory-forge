@@ -367,18 +367,34 @@ pub fn rebuild_static_mesh(
         }
     }
 
-    // Subtle tile-grid backdrop.
-    let gline = [1.0, 1.0, 1.0, 0.025];
-    let (w, h) = (world.0.width as f32, world.0.height as f32);
-    let (cx, cy) = ((w - 1.0) * 0.5 * TILE, (h - 1.0) * 0.5 * TILE);
-    for gx in 0..world.0.width + 1 {
-        let x = (gx as f32 - 0.5) * TILE;
-        batch.quad(Vec2::new(x, cy), 0.5, h * TILE * 0.5, 0.0, gline);
+    // Industrial factory floor: concrete tiles with a hazard-stripe border.
+    batch.set_z(-0.05);
+    let floor_a = lin(Color::srgb(0.085, 0.095, 0.11));
+    let floor_b = lin(Color::srgb(0.105, 0.115, 0.13));
+    let hazard_yellow = lin(Color::srgb(0.75, 0.65, 0.15));
+    let hazard_black = lin(Color::srgb(0.06, 0.06, 0.07));
+    let border = 2;
+    for y in 0..world.0.height {
+        for x in 0..world.0.width {
+            let c = Vec2::new(x as f32 * TILE, y as f32 * TILE);
+            let is_edge = x < border || y < border
+                || x >= world.0.width - border
+                || y >= world.0.height - border;
+            let color = if is_edge {
+                if (x + y) % 2 == 0 {
+                    hazard_yellow
+                } else {
+                    hazard_black
+                }
+            } else if (x + y) % 2 == 0 {
+                floor_a
+            } else {
+                floor_b
+            };
+            batch.quad(c, TILE * 0.5, TILE * 0.5, 0.0, color);
+        }
     }
-    for gy in 0..world.0.height + 1 {
-        let y = (gy as f32 - 0.5) * TILE;
-        batch.quad(Vec2::new(cx, y), w * TILE * 0.5, 0.5, 0.0, gline);
-    }
+    batch.set_z(0.0);
 
     batch.set_z(0.05);
     for b in 0..sim.0.belt_count() {

@@ -33,8 +33,8 @@ impl Default for Hotbar {
         Self {
             slots: [
                 Some(Tool::Belt),
-                Some(Tool::Source),
-                Some(Tool::Sink),
+                Some(Tool::Pole),
+                Some(Tool::Generator),
                 Some(Tool::Assembler),
                 Some(Tool::Inserter),
                 Some(Tool::Miner),
