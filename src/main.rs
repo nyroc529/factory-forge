@@ -4,11 +4,15 @@ mod economy;
 mod grid;
 mod rail;
 mod render;
+mod settings;
 mod sim;
 mod ui;
+mod replay;
+mod telemetry;
 
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::prelude::*;
+use bevy::window::{WindowMode, WindowResolution};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use belts::{BeltSim, BuildingKind, Dir, KINDS};
@@ -38,6 +42,7 @@ struct FluidScratch {
 }
 
 fn main() {
+    let game_settings = settings::load();
     let (sim, grid) = build_demo_world();
 
     let mut history = ui::History::default();
@@ -48,6 +53,15 @@ fn main() {
             DefaultPlugins.set(WindowPlugin {
                 primary_window: Some(Window {
                     title: "Factory Forge".into(),
+                    resolution: WindowResolution::new(
+                        game_settings.window_width as f32,
+                        game_settings.window_height as f32,
+                    ),
+                    mode: if game_settings.fullscreen {
+                        WindowMode::BorderlessFullscreen
+                    } else {
+                        WindowMode::Windowed
+                    },
                     ..default()
                 }),
                 ..default()
@@ -63,6 +77,7 @@ fn main() {
         .init_resource::<ContractState>()
         .init_resource::<ProductionStats>()
         .init_resource::<VictoryState>()
+        .insert_resource(game_settings)
         .init_resource::<ui::EditorState>()
         .init_resource::<ui::Selection>()
         .init_resource::<ui::Blueprint>()
@@ -70,8 +85,11 @@ fn main() {
         .init_resource::<ui::BuildMenu>()
         .init_resource::<rail::RailNetwork>()
         .init_resource::<combat::CombatState>()
-        .add_systems(Startup, (render::setup_scene, ui::setup_ghost, ui::setup_hotbar))
-        .add_systems(FixedUpdate, run_sim)
+        .init_resource::<replay::ReplayLog>()
+        .init_resource::<telemetry::Telemetry>()
+        .init_resource::<telemetry::GraphVisible>()
+        .add_systems(Startup, (render::setup_scene, ui::setup_ghost, ui::setup_hotbar, telemetry::setup_graph))
+        .add_systems(FixedUpdate, (run_sim, telemetry::record, replay::record).chain())
         .add_systems(
             Update,
             (
@@ -91,6 +109,9 @@ fn main() {
                 render::update_victory_overlay,
                 rail::update_train_visuals,
                 combat::update_enemy_visuals,
+                telemetry::toggle_graph,
+                telemetry::update_graph_overlay,
+                settings::save_system,
             )
                 .chain(),
         )

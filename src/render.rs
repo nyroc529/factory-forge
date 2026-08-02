@@ -17,6 +17,7 @@ use bevy::sprite::{MaterialMesh2dBundle, Mesh2dHandle};
 use crate::belts::{BeltSim, BuildingKind, Dir, INVALID, ITEM_NAMES};
 use crate::combat::CombatState;
 use crate::economy::{ContractState, PlayerState, ProductionStats, VictoryState};
+use crate::settings::Settings;
 use crate::sim::{INSERTER_COOLDOWN, RECIPES, is_consumer, is_power_node, POWER_RADIUS2};
 use crate::ui::{Blueprint, EditorState, Selection};
 use crate::{GameWorld, Sim};
@@ -193,15 +194,19 @@ pub fn setup_scene(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     sim: Res<Sim>,
+    settings: Res<Settings>,
 ) {
     // Bloom is opt-in (B key): HDR costs FPS on integrated GPUs, so default off.
-    commands.spawn(Camera2dBundle {
+    let mut camera = commands.spawn(Camera2dBundle {
         camera: Camera {
-            hdr: false,
+            hdr: settings.bloom,
             ..default()
         },
         ..default()
     });
+    if settings.bloom {
+        camera.insert(BloomSettings::NATURAL);
+    }
     commands.insert_resource(CameraTarget {
         pos: Vec2::new(
             sim.0.belt_x.iter().sum::<i32>() as f32 / sim.0.belt_count() as f32 * TILE,
@@ -711,6 +716,7 @@ pub fn camera_control(
 
 /// Toggle bloom with B (to measure its GPU cost).
 pub fn toggle_bloom(
+    mut settings: ResMut<Settings>,
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
     mut cam: Query<(Entity, &mut Camera, Option<&BloomSettings>), With<Camera>>,
@@ -720,9 +726,11 @@ pub fn toggle_bloom(
             if bloom.is_some() {
                 camera.hdr = false;
                 commands.entity(e).remove::<BloomSettings>();
+                settings.bloom = false;
             } else {
                 camera.hdr = true;
                 commands.entity(e).insert(BloomSettings::NATURAL);
+                settings.bloom = true;
             }
         }
     }

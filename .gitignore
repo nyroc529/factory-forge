@@ -1,3 +1,6 @@
 /target
 factory.save
+*.replay
+*.settings
+/assets
 .DS_Store

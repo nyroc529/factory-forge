@@ -1,0 +1,21 @@
+Factory Forge - Progress
+========================
+
+Session: release-prep
+
+Done:
+- Settings persistence: master/music/sfx volume, fullscreen, window size, bloom. Loaded on startup, saved on exit.
+- Production telemetry: per-minute shipped/sold rates, 2-minute sample buffer.
+- ASCII production graph overlay (toggle with G).
+- Replay buffer: snapshots every 5 seconds, F6 saves to factory.replay.
+- Release build succeeds; Desktop launcher runs target/release/factory-forge.
+
+In progress:
+- In-game settings UI.
+- Audio: ambient + SFX (placeholder procedural WAVs).
+- Main menu / game states.
+
+Next:
+- Finish settings UI and audio.
+- Add main menu.
+- Final release build, playtest, push GitHub tag v0.1.0.

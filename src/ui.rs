@@ -829,6 +829,7 @@ pub fn save_load(
     mut rail: ResMut<crate::rail::RailNetwork>,
     mut combat: ResMut<crate::combat::CombatState>,
     mut dirty: ResMut<WorldDirty>,
+    replay: Res<crate::replay::ReplayLog>,
 ) {
     if keys.just_pressed(KeyCode::F5) {
         let save = SaveGame {
@@ -879,6 +880,9 @@ pub fn save_load(
             }
             Err(e) => error!("load failed: {e}"),
         }
+    }
+    if keys.just_pressed(KeyCode::F6) {
+        replay.save();
     }
 }
 
