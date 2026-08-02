@@ -347,26 +347,6 @@ pub fn rebuild_static_mesh(
     let plate = lin(Color::srgb(0.13, 0.15, 0.19));
     let track = lin(Color::srgb(0.19, 0.22, 0.28));
 
-    // Ore patches.
-    for y in 0..world.0.height {
-        for x in 0..world.0.width {
-            let ore = world.0.ore_at(x, y);
-            if ore == 0 {
-                continue;
-            }
-            let c = Vec2::new((x as f32 - 0.5) * TILE, (y as f32 - 0.5) * TILE);
-            let ore_color = match ore {
-                1 => lin(Color::srgb(0.42, 0.22, 0.10)), // iron
-                2 => lin(Color::srgb(0.09, 0.28, 0.42)), // copper
-                3 => lin(Color::srgb(0.15, 0.15, 0.16)), // coal
-                6 => lin(Color::srgb(0.55, 0.55, 0.53)), // stone
-                7 => lin(Color::srgb(0.30, 0.15, 0.40)), // oil
-                _ => lin(Color::srgb(0.35, 0.25, 0.18)),
-            };
-            batch.quad(c, TILE * 0.43, TILE * 0.43, 0.0, ore_color);
-        }
-    }
-
     // Industrial factory floor: concrete tiles with a hazard-stripe border.
     batch.set_z(-0.05);
     let floor_a = lin(Color::srgb(0.085, 0.095, 0.11));
@@ -395,6 +375,26 @@ pub fn rebuild_static_mesh(
         }
     }
     batch.set_z(0.0);
+
+    // Ore patches.
+    for y in 0..world.0.height {
+        for x in 0..world.0.width {
+            let ore = world.0.ore_at(x, y);
+            if ore == 0 {
+                continue;
+            }
+            let c = Vec2::new((x as f32 - 0.5) * TILE, (y as f32 - 0.5) * TILE);
+            let ore_color = match ore {
+                1 => lin(Color::srgb(0.42, 0.22, 0.10)), // iron
+                2 => lin(Color::srgb(0.09, 0.28, 0.42)), // copper
+                3 => lin(Color::srgb(0.15, 0.15, 0.16)), // coal
+                6 => lin(Color::srgb(0.55, 0.55, 0.53)), // stone
+                7 => lin(Color::srgb(0.30, 0.15, 0.40)), // oil
+                _ => lin(Color::srgb(0.35, 0.25, 0.18)),
+            };
+            batch.quad(c, TILE * 0.43, TILE * 0.43, 0.0, ore_color);
+        }
+    }
 
     batch.set_z(0.05);
     for b in 0..sim.0.belt_count() {
