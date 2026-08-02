@@ -915,8 +915,8 @@ pub fn setup_hotbar(mut commands: Commands) {
                     .spawn((
                         ButtonBundle {
                             style: Style {
-                                width: Val::Px(48.0),
-                                height: Val::Px(48.0),
+                                width: Val::Px(72.0),
+                                height: Val::Px(56.0),
                                 margin: UiRect::all(Val::Px(2.0)),
                                 justify_content: JustifyContent::Center,
                                 align_items: AlignItems::Center,
@@ -965,11 +965,11 @@ pub fn setup_hotbar(mut commands: Commands) {
         ToolInfoPanel,
     ));
 
-    // Persistent objective hint at the top of the screen.
+    // Persistent objective hint in the top-right to avoid overlapping the resource HUD.
     commands.spawn((
         TextBundle {
             text: Text::from_section(
-                "Mine ore -> transport it -> dump it in the Scrap Pit for credits -> unlock tech with Research Labs",
+                "Mine ore  ->  transport it  ->  dump it in the Scrap Pit  ->  unlock tech",
                 TextStyle {
                     font_size: 13.0,
                     color: Color::srgb(0.75, 0.8, 0.85),
@@ -979,10 +979,7 @@ pub fn setup_hotbar(mut commands: Commands) {
             style: Style {
                 position_type: PositionType::Absolute,
                 top: Val::Px(8.0),
-                left: Val::Px(0.0),
-                right: Val::Px(0.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
+                right: Val::Px(8.0),
                 ..default()
             },
             ..default()
@@ -1025,12 +1022,15 @@ pub fn update_hotbar(
     mut texts: Query<&mut Text>,
 ) {
     for (slot, mut bg, children) in slots.iter_mut() {
-        let label = if let Some(tool) = hotbar.slots[slot.0] {
-            *bg = tool_color(tool).into();
-            tool_label(tool)
+        let (label, is_filled) = if let Some(tool) = hotbar.slots[slot.0] {
+            (tool_info(tool).name, true)
         } else {
-            *bg = Color::srgb(0.25, 0.27, 0.30).into();
-            ""
+            ("", false)
+        };
+        *bg = if is_filled {
+            Color::srgb(0.22, 0.24, 0.27).into()
+        } else {
+            Color::srgb(0.12, 0.13, 0.15).into()
         };
         let key = if slot.0 == 9 { "0" } else { &["1","2","3","4","5","6","7","8","9"][slot.0] };
         for &child in children.iter() {
@@ -1040,7 +1040,7 @@ pub fn update_hotbar(
         }
         // Highlight selected slot.
         if slot.0 == hotbar.selected {
-            *bg = bg.0.mix(&Color::WHITE, 0.4).into();
+            *bg = bg.0.mix(&Color::WHITE, 0.3).into();
         }
     }
 }
