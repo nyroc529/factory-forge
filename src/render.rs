@@ -349,10 +349,10 @@ pub fn rebuild_static_mesh(
 
     // Industrial factory floor: concrete tiles with a hazard-stripe border.
     batch.set_z(-0.05);
-    let floor_a = lin(Color::srgb(0.085, 0.095, 0.11));
-    let floor_b = lin(Color::srgb(0.105, 0.115, 0.13));
-    let hazard_yellow = lin(Color::srgb(0.75, 0.65, 0.15));
-    let hazard_black = lin(Color::srgb(0.06, 0.06, 0.07));
+    let floor_a = lin(Color::srgb(0.28, 0.30, 0.33));
+    let floor_b = lin(Color::srgb(0.32, 0.34, 0.37));
+    let hazard_yellow = lin(Color::srgb(0.85, 0.72, 0.18));
+    let hazard_black = lin(Color::srgb(0.18, 0.18, 0.20));
     let border = 2;
     for y in 0..world.0.height {
         for x in 0..world.0.width {
