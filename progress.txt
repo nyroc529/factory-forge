@@ -8,16 +8,12 @@ Done:
 - Production telemetry: per-minute shipped/sold rates, 2-minute sample buffer.
 - ASCII production graph overlay (toggle with G).
 - Replay buffer: snapshots every 5 seconds, F6 saves to factory.replay.
-- Release build succeeds; Desktop launcher runs target/release/factory-forge.
-
-Done:
 - In-game settings UI (O to toggle, -/= adjust volume, F fullscreen, B bloom).
 - Audio: procedural ambient WAV loop and placement SFX, with master/music/sfx volume.
 - Main menu / game states (Enter to play, Esc for menu, Q to quit).
-
-In progress:
-- Final release build.
-- Playtest pass.
+- Asset path resolution fixed so the release binary loads generated WAVs from the project root.
+- Final release build succeeds.
+- Smoke test: binary launches, window appears, audio assets load without panic.
 
 Next:
-- Final release build, playtest, push GitHub tag v0.1.0.
+- Tag v0.1.0 and push a GitHub release.
