@@ -19,6 +19,7 @@ use crate::combat::CombatState;
 use crate::economy::{ContractState, PlayerState, ProductionStats, VictoryState};
 use crate::settings::Settings;
 use crate::sim::{INSERTER_COOLDOWN, RECIPES, is_consumer, is_power_node, POWER_RADIUS2};
+use crate::sprites::BuildingSpriteSet;
 use crate::ui::{Blueprint, EditorState, Selection};
 use crate::{GameWorld, Sim};
 
@@ -64,21 +65,25 @@ struct MeshBatch {
     positions: Vec<[f32; 3]>,
     colors: Vec<[f32; 4]>,
     indices: Vec<u32>,
+    z: f32,
 }
 
 impl Default for MeshBatch {
     fn default() -> Self {
-        // Preallocate a reasonable amount so the dynamic mesh doesn't reallocate
-        // every frame while growing.
         Self {
-            positions: Vec::with_capacity(16384),
-            colors: Vec::with_capacity(16384),
-            indices: Vec::with_capacity(24576),
+            positions: Vec::new(),
+            colors: Vec::new(),
+            indices: Vec::new(),
+            z: 0.0,
         }
     }
 }
 
 impl MeshBatch {
+    fn set_z(&mut self, z: f32) {
+        self.z = z;
+    }
+
     /// Push a rotated quad centered at `c` with half-extents `hw`/`hh`.
     fn quad(&mut self, c: Vec2, hw: f32, hh: f32, angle: f32, color: [f32; 4]) {
         let (s, co) = angle.sin_cos();
@@ -87,7 +92,7 @@ impl MeshBatch {
         let base = self.positions.len() as u32;
         for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
             let p = c + ex * (hw * sx) + ey * (hh * sy);
-            self.positions.push([p.x, p.y, 0.0]);
+            self.positions.push([p.x, p.y, self.z]);
             self.colors.push(color);
         }
         self.indices
@@ -102,13 +107,13 @@ impl MeshBatch {
         for s in 0..sides {
             let a = angle + s as f32 * step;
             let p = c + Vec2::new(a.cos(), a.sin()) * r;
-            self.positions.push([p.x, p.y, 0.0]);
+            self.positions.push([p.x, p.y, self.z]);
             self.colors.push(color);
         }
         for s in 0..sides {
             let i = base + s;
             let j = base + (s + 1) % sides;
-            self.positions.push([c.x, c.y, 0.0]);
+            self.positions.push([c.x, c.y, self.z]);
             self.colors.push(color);
             self.indices.extend_from_slice(&[i, j, base + sides + s]);
         }
@@ -149,156 +154,6 @@ fn lin_a(c: Color, a: f32) -> [f32; 4] {
     v
 }
 
-/// Draw a small symbolic icon on top of each building so players can tell
-/// machines apart at a glance. Unpowered buildings get a dimmed icon.
-fn draw_building_icon(
-    batch: &mut MeshBatch,
-    c: Vec2,
-    half: f32,
-    kind: BuildingKind,
-    dir: Dir,
-    powered: bool,
-) {
-    let alpha = if powered { 1.0 } else { 0.35 };
-    let s = |r: f32, g: f32, b: f32| lin_a(Color::srgb(r, g, b), alpha);
-    let pi = std::f32::consts::PI;
-
-    match kind {
-        BuildingKind::Miner => {
-            // Yellow drill head on a dark bar.
-            batch.ngon(
-                c + Vec2::new(0.0, half * 0.1),
-                half * 0.35,
-                3,
-                pi,
-                s(0.95, 0.85, 0.25),
-            );
-            batch.line(
-                c + Vec2::new(-half * 0.35, -half * 0.25),
-                c + Vec2::new(half * 0.35, -half * 0.25),
-                half * 0.12,
-                s(0.5, 0.5, 0.55),
-            );
-        }
-        BuildingKind::Assembler => {
-            // Gear-like hexagon with a center hub.
-            let gear = s(0.75, 0.75, 0.8);
-            batch.ngon(c, half * 0.35, 6, 0.0, gear);
-            batch.ngon(c, half * 0.12, 6, 0.0, s(0.25, 0.25, 0.3));
-        }
-        BuildingKind::Inserter => {
-            // Arm reaching toward the output direction.
-            let (dx, dy) = dir.fvec();
-            let tip = c + Vec2::new(dx, dy) * half * 0.55;
-            let base = c - Vec2::new(dx, dy) * half * 0.4;
-            batch.line(base, tip, half * 0.12, s(0.9, 0.9, 0.95));
-        }
-        BuildingKind::Storage => {
-            // Crate "X".
-            let x = s(0.8, 0.8, 0.85);
-            batch.line(
-                c + Vec2::new(-half * 0.3, -half * 0.3),
-                c + Vec2::new(half * 0.3, half * 0.3),
-                half * 0.1,
-                x,
-            );
-            batch.line(
-                c + Vec2::new(half * 0.3, -half * 0.3),
-                c + Vec2::new(-half * 0.3, half * 0.3),
-                half * 0.1,
-                x,
-            );
-        }
-        BuildingKind::Shipment => {
-            // Arrow pointing the output direction.
-            let (dx, dy) = dir.fvec();
-            let tip = c + Vec2::new(dx, dy) * half * 0.5;
-            let back = c - Vec2::new(dx, dy) * half * 0.2;
-            let perp = Vec2::new(-dy, dx) * half * 0.25;
-            let arr = s(0.95, 0.95, 1.0);
-            batch.line(back + perp, tip, half * 0.1, arr);
-            batch.line(back - perp, tip, half * 0.1, arr);
-        }
-        BuildingKind::Generator => {
-            // Lightning bolt symbol.
-            let bolt = s(0.15, 0.12, 0.04);
-            let a = c + Vec2::new(-half * 0.15, half * 0.35);
-            let b = c + Vec2::new(half * 0.05, half * 0.0);
-            let d = c + Vec2::new(-half * 0.05, half * 0.0);
-            let e = c + Vec2::new(half * 0.15, -half * 0.35);
-            batch.line(a, b, half * 0.13, bolt);
-            batch.line(d, e, half * 0.13, bolt);
-        }
-        BuildingKind::Pole => {
-            // Crossbar on the power pole.
-            let bar = s(0.85, 0.85, 0.9);
-            batch.line(
-                c + Vec2::new(-half * 0.3, 0.0),
-                c + Vec2::new(half * 0.3, 0.0),
-                half * 0.1,
-                bar,
-            );
-            batch.line(
-                c + Vec2::new(0.0, -half * 0.3),
-                c + Vec2::new(0.0, half * 0.3),
-                half * 0.1,
-                bar,
-            );
-        }
-        BuildingKind::Pump => {
-            // Water-drop triangle.
-            batch.ngon(c, half * 0.3, 3, 0.0, s(0.35, 0.6, 0.85));
-        }
-        BuildingKind::Tank => {
-            // Fluid level line.
-            batch.line(
-                c + Vec2::new(-half * 0.35, 0.0),
-                c + Vec2::new(half * 0.35, 0.0),
-                half * 0.15,
-                s(0.35, 0.6, 0.85),
-            );
-        }
-        BuildingKind::Lab => {
-            // Flask triangle.
-            batch.ngon(
-                c + Vec2::new(0.0, -half * 0.1),
-                half * 0.35,
-                3,
-                0.0,
-                s(0.5, 0.8, 0.7),
-            );
-        }
-        BuildingKind::Turret => {
-            // Crosshair + center square.
-            let red = s(0.9, 0.2, 0.2);
-            batch.line(
-                c + Vec2::new(-half * 0.35, 0.0),
-                c + Vec2::new(half * 0.35, 0.0),
-                half * 0.1,
-                red,
-            );
-            batch.line(
-                c + Vec2::new(0.0, -half * 0.35),
-                c + Vec2::new(0.0, half * 0.35),
-                half * 0.1,
-                red,
-            );
-            batch.ngon(c, half * 0.15, 4, 0.0, red);
-        }
-        BuildingKind::ForgeCore => {
-            // Glowing diamond core.
-            batch.ngon(
-                c,
-                half * 0.35,
-                4,
-                std::f32::consts::FRAC_PI_4,
-                glow(Color::srgb(0.9, 0.4, 0.8), 2.0),
-            );
-        }
-        _ => {}
-    }
-}
-
 fn empty_mesh() -> Mesh {
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
@@ -336,6 +191,9 @@ pub struct Hud;
 
 #[derive(Component)]
 pub struct VictoryOverlay;
+
+#[derive(Component)]
+pub struct BuildingSprite;
 
 // -------------------------------------------------------------------- setup
 
@@ -471,11 +329,19 @@ pub fn rebuild_static_mesh(
     mut meshes: ResMut<Assets<Mesh>>,
     sim: Res<Sim>,
     world: Res<GameWorld>,
+    mut commands: Commands,
+    set: Res<BuildingSpriteSet>,
+    old_sprites: Query<Entity, With<BuildingSprite>>,
 ) {
     if !dirty.0 {
         return;
     }
     dirty.0 = false;
+
+    // Despawn the previous batch of building sprites before rebuilding.
+    for e in old_sprites.iter() {
+        commands.entity(e).despawn_recursive();
+    }
 
     let mut batch = MeshBatch::default();
     let plate = lin(Color::srgb(0.13, 0.15, 0.19));
@@ -514,6 +380,7 @@ pub fn rebuild_static_mesh(
         batch.quad(Vec2::new(cx, y), w * TILE * 0.5, 0.5, 0.0, gline);
     }
 
+    batch.set_z(0.05);
     for b in 0..sim.0.belt_count() {
         if !sim.0.belt_active[b] {
             continue;
@@ -524,78 +391,62 @@ pub fn rebuild_static_mesh(
         batch.quad(c, TILE * 0.46, TILE * 0.39, angle, track);
     }
 
-    let outline = lin(Color::srgb(0.04, 0.05, 0.06));
+    // Buildings are drawn as textured sprites so they look like real machines.
     for i in 0..sim.0.bld_x.len() {
         if !sim.0.bld_active[i] {
             continue;
         }
         let c = Vec2::new(sim.0.bld_x[i] as f32 * TILE, sim.0.bld_y[i] as f32 * TILE);
         let angle = dir_angle(sim.0.bld_dir[i]);
-        let half = match sim.0.bld_kind[i] {
-            BuildingKind::Inserter => TILE * 0.32,
-            BuildingKind::Pipe | BuildingKind::Pump => TILE * 0.22,
-            BuildingKind::Tank => TILE * 0.45,
-            BuildingKind::RailTrack => TILE * 0.15,
-            _ => TILE * 0.45,
+        let kind = sim.0.bld_kind[i] as usize;
+        let handle = set.handles.get(kind).cloned().unwrap_or_default();
+        let tint = if sim.0.bld_powered[i] {
+            Color::srgba(1.0, 1.0, 1.0, 1.0)
+        } else {
+            Color::srgba(0.55, 0.55, 0.6, 1.0)
         };
-        // Dark outline makes buildings pop off the belts/ore.
-        batch.quad(c, half + TILE * 0.03, half + TILE * 0.03, 0.0, outline);
-        let body = match sim.0.bld_kind[i] {
-            BuildingKind::Source => lin(Color::srgb(0.16, 0.45, 0.42)),
-            BuildingKind::Sink => lin(Color::srgb(0.5, 0.3, 0.14)),
-            BuildingKind::Assembler => lin(Color::srgb(0.32, 0.26, 0.45)),
-            BuildingKind::Inserter => lin(Color::srgb(0.55, 0.42, 0.12)),
-            BuildingKind::Miner => lin(Color::srgb(0.38, 0.18, 0.42)),
-            BuildingKind::Storage => lin(Color::srgb(0.22, 0.32, 0.40)),
-            BuildingKind::Shipment => lin(Color::srgb(0.20, 0.55, 0.40)),
-            BuildingKind::Splitter => lin(Color::srgb(0.55, 0.50, 0.18)),
-            BuildingKind::Pole => lin(Color::srgb(0.55, 0.55, 0.60)),
-            BuildingKind::Generator => lin(Color::srgb(0.90, 0.80, 0.25)),
-            BuildingKind::Pipe => lin(Color::srgb(0.45, 0.45, 0.55)),
-            BuildingKind::Pump => lin(Color::srgb(0.25, 0.45, 0.65)),
-            BuildingKind::Tank => lin(Color::srgb(0.45, 0.50, 0.55)),
-            BuildingKind::Lab => lin(Color::srgb(0.20, 0.55, 0.45)),
-            BuildingKind::RailTrack => lin(Color::srgb(0.25, 0.25, 0.28)),
-            BuildingKind::RailStation => lin(Color::srgb(0.45, 0.35, 0.25)),
-            BuildingKind::Turret => lin(Color::srgb(0.65, 0.25, 0.25)),
-            BuildingKind::ForgeCore => lin(Color::srgb(0.85, 0.35, 0.75)),
-        };
-        batch.quad(c, half, half, 0.0, body);
-        // Direction notch on the output/input edge.
-        let (dx, dy) = sim.0.bld_dir[i].fvec();
-        let notch = c + Vec2::new(dx, dy) * TILE * 0.32;
-        batch.quad(notch, TILE * 0.10, TILE * 0.16, angle, lin(Color::srgb(0.9, 0.9, 0.95)));
+        commands.spawn((
+            SpriteBundle {
+                texture: handle,
+                transform: Transform::from_translation(Vec3::new(c.x, c.y, 0.1))
+                    .with_rotation(Quat::from_rotation_z(angle)),
+                sprite: Sprite {
+                    custom_size: Some(Vec2::splat(TILE)),
+                    color: tint,
+                    ..default()
+                },
+                ..default()
+            },
+            BuildingSprite,
+        ));
+    }
 
-        // Simple iconic silhouettes so buildings read as machinery.
-        draw_building_icon(
-            &mut batch,
-            c,
-            half,
-            sim.0.bld_kind[i],
-            sim.0.bld_dir[i],
-            sim.0.bld_powered[i],
-        );
+    // Pipe connections and power wires sit on top of the building sprites.
+    batch.set_z(0.2);
 
-        // Pipe connections between adjacent fluid nodes.
-        if sim.0.bld_fluid_capacity[i] > 0 {
-            let pipe_color = lin(Color::srgb(0.35, 0.35, 0.45));
-            for (dx, dy) in [(1, 0), (0, 1)] {
-                let nx = sim.0.bld_x[i] + dx;
-                let ny = sim.0.bld_y[i] + dy;
-                let nb = world.0.building_at(nx, ny);
-                if nb != INVALID {
-                    let j = nb as usize;
-                    if sim.0.bld_active[j] && sim.0.bld_fluid_capacity[j] > 0 {
-                        let nc = Vec2::new(nx as f32 * TILE, ny as f32 * TILE);
-                        batch.line(c, nc, TILE * 0.08, pipe_color);
-                    }
+    // Pipe connections between adjacent fluid nodes.
+    for i in 0..sim.0.bld_x.len() {
+        if !sim.0.bld_active[i] || sim.0.bld_fluid_capacity[i] == 0 {
+            continue;
+        }
+        let c = Vec2::new(sim.0.bld_x[i] as f32 * TILE, sim.0.bld_y[i] as f32 * TILE);
+        let pipe_color = lin(Color::srgb(0.35, 0.35, 0.45));
+        for (dx, dy) in [(1, 0), (0, 1)] {
+            let nx = sim.0.bld_x[i] + dx;
+            let ny = sim.0.bld_y[i] + dy;
+            let nb = world.0.building_at(nx, ny);
+            if nb != INVALID {
+                let j = nb as usize;
+                if sim.0.bld_active[j] && sim.0.bld_fluid_capacity[j] > 0 {
+                    let nc = Vec2::new(nx as f32 * TILE, ny as f32 * TILE);
+                    batch.line(c, nc, TILE * 0.08, pipe_color);
                 }
             }
         }
     }
 
     // Power wires between nearby power nodes (poles/generators/consumers).
-    let wire = lin(Color::srgb(0.35, 0.35, 0.45));
+    let wire = lin(Color::srgb(0.55, 0.55, 0.65));
     for i in 0..sim.0.bld_x.len() {
         if !sim.0.bld_active[i] || !is_power_node(sim.0.bld_kind[i]) {
             continue;
@@ -695,6 +546,7 @@ pub fn build_dynamic_mesh(
     let alpha = fixed.overstep_fraction();
     let t = time.elapsed_seconds();
     let mut batch = MeshBatch::default();
+    batch.set_z(0.3);
 
     // Level of detail: skip decorative overlays when zoomed out.
     let detail = proj.scale < 2.5;

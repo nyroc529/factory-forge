@@ -11,6 +11,7 @@ mod ui;
 mod replay;
 mod telemetry;
 mod audio;
+mod sprites;
 
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::prelude::*;
@@ -109,7 +110,7 @@ fn main() {
         .init_resource::<telemetry::GraphVisible>()
         .init_resource::<settings_ui::SettingsMenuVisible>()
         .init_resource::<audio::SfxQueue>()
-        .add_systems(Startup, (setup_main_menu, render::setup_scene, ui::setup_ghost, ui::setup_hotbar, telemetry::setup_graph, settings_ui::setup_settings_ui, audio::setup_audio))
+        .add_systems(Startup, (sprites::setup_sprites, setup_main_menu, render::setup_scene, ui::setup_ghost, ui::setup_hotbar, telemetry::setup_graph, settings_ui::setup_settings_ui, audio::setup_audio))
         .add_systems(
             FixedUpdate,
             (run_sim, telemetry::record, replay::record)
