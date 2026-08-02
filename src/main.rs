@@ -130,6 +130,7 @@ fn main() {
                 ui::save_load,
                 ui::update_hotbar,
                 ui::update_tool_info,
+                ui::menu_scroll,
             )
                 .chain()
                 .in_set(UpdateInputSet)

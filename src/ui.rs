@@ -1,7 +1,9 @@
 //! Editor: place belts/sources/sinks with the mouse, rotate with R,
 //! erase with right-click. A ghost sprite previews the placement.
 
+use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
+use bevy::ui::Overflow;
 use serde::{Deserialize, Serialize};
 
 use crate::belts::{BuildingKind, Dir, INVALID};
@@ -68,6 +70,12 @@ pub struct MenuContract(pub u16);
 
 #[derive(Component)]
 pub struct MenuRoot;
+
+#[derive(Component)]
+pub struct MenuScrollPanel;
+
+#[derive(Component)]
+pub struct MenuScrollContent;
 
 /// Undo/redo snapshots of the whole world.
 #[derive(Resource, Default)]
@@ -1016,6 +1024,35 @@ pub fn update_tool_info(
     }
 }
 
+pub fn menu_scroll(
+    mut scroll_events: EventReader<MouseWheel>,
+    mut content: Query<(&mut Style, &Node), With<MenuScrollContent>>,
+    panels: Query<&Node, With<MenuScrollPanel>>,
+    menu: Res<BuildMenu>,
+) {
+    if !menu.visible {
+        return;
+    }
+    let Ok(panel_node) = panels.get_single() else {
+        return;
+    };
+    for ev in scroll_events.read() {
+        let delta_y = match ev.unit {
+            MouseScrollUnit::Line => ev.y * 40.0,
+            MouseScrollUnit::Pixel => ev.y,
+        };
+        for (mut style, node) in content.iter_mut() {
+            let max_offset = (node.size().y - panel_node.size().y).max(0.0);
+            let current = match style.top {
+                Val::Px(v) => -v,
+                _ => 0.0,
+            };
+            let next = (current - delta_y).clamp(0.0, max_offset);
+            style.top = Val::Px(-next);
+        }
+    }
+}
+
 pub fn update_hotbar(
     hotbar: Res<Hotbar>,
     mut slots: Query<(&HotbarSlot, &mut BackgroundColor, &Children)>,
@@ -1046,54 +1083,69 @@ pub fn update_hotbar(
 }
 
 fn menu_button(parent: &mut ChildBuilder, tool: Tool, player: &PlayerState) {
+    let info = tool_info(tool);
     let unlocked = is_tool_unlocked(tool, player.tech_flags);
     if !unlocked {
         if let Some(tech) = tech_for_tool(tool) {
             let can_afford = player.research_points >= tech.cost();
+            let name_color = if can_afford {
+                Color::srgb(0.85, 0.95, 1.0)
+            } else {
+                Color::srgb(0.95, 0.5, 0.5)
+            };
+            let cost_color = if can_afford {
+                Color::srgb(0.65, 0.85, 0.95)
+            } else {
+                Color::srgb(0.95, 0.5, 0.5)
+            };
             parent
                 .spawn((
                     ButtonBundle {
                         style: Style {
-                            width: Val::Px(130.0),
-                            height: Val::Px(110.0),
-                            margin: UiRect::all(Val::Px(4.0)),
-                            padding: UiRect::all(Val::Px(4.0)),
+                            width: Val::Px(180.0),
+                            height: Val::Px(130.0),
+                            margin: UiRect::all(Val::Px(6.0)),
+                            padding: UiRect::all(Val::Px(8.0)),
                             flex_direction: FlexDirection::Column,
                             justify_content: JustifyContent::FlexStart,
                             align_items: AlignItems::Center,
                             ..default()
                         },
-                        background_color: Color::srgba(0.15, 0.15, 0.15, 0.85).into(),
+                        background_color: Color::srgba(0.12, 0.14, 0.16, 0.98).into(),
                         ..default()
                     },
                     MenuUnlock(tech),
                 ))
                 .with_children(|p| {
                     p.spawn(TextBundle::from_section(
-                        format!("[LOCKED] {}", tool_info(tool).name),
+                        format!("[LOCKED] {}", info.name),
                         TextStyle {
-                            font_size: 11.0,
-                            color: Color::srgb(0.55, 0.55, 0.55),
+                            font_size: 13.0,
+                            color: name_color,
                             ..default()
                         },
                     ));
                     p.spawn(TextBundle::from_section(
-                        format!("{} RP", tech.cost()),
+                        format!("{} RP to unlock", tech.cost()),
+                        TextStyle {
+                            font_size: 12.0,
+                            color: cost_color,
+                            ..default()
+                        },
+                    ));
+                    p.spawn(TextBundle::from_section(
+                        info.description.to_string(),
                         TextStyle {
                             font_size: 10.0,
-                            color: if can_afford {
-                                Color::srgb(0.65, 0.85, 0.95)
-                            } else {
-                                Color::srgb(0.95, 0.5, 0.5)
-                            },
+                            color: Color::srgb(0.6, 0.65, 0.72),
                             ..default()
                         },
                     ));
                     p.spawn(TextBundle::from_section(
-                        tech.description(),
+                        if can_afford { "Click to research" } else { "Not enough RP" },
                         TextStyle {
-                            font_size: 8.0,
-                            color: Color::srgb(0.6, 0.65, 0.72),
+                            font_size: 9.0,
+                            color: Color::srgb(0.75, 0.75, 0.8),
                             ..default()
                         },
                     ));
@@ -1102,20 +1154,19 @@ fn menu_button(parent: &mut ChildBuilder, tool: Tool, player: &PlayerState) {
         }
     }
 
-    let info = tool_info(tool);
     let affordable = player.credits >= info.cost.credits;
-    let mut color = tool_color(tool);
+    let mut color = Color::srgba(0.18, 0.20, 0.24, 0.98);
     if !affordable {
-        color = color.with_alpha(0.35);
+        color = color.with_alpha(0.45);
     }
     parent
         .spawn((
             ButtonBundle {
                 style: Style {
-                    width: Val::Px(130.0),
-                    height: Val::Px(110.0),
-                    margin: UiRect::all(Val::Px(4.0)),
-                    padding: UiRect::all(Val::Px(4.0)),
+                    width: Val::Px(180.0),
+                    height: Val::Px(130.0),
+                    margin: UiRect::all(Val::Px(6.0)),
+                    padding: UiRect::all(Val::Px(8.0)),
                     flex_direction: FlexDirection::Column,
                     justify_content: JustifyContent::FlexStart,
                     align_items: AlignItems::Center,
@@ -1128,9 +1179,9 @@ fn menu_button(parent: &mut ChildBuilder, tool: Tool, player: &PlayerState) {
         ))
         .with_children(|p| {
             p.spawn(TextBundle::from_section(
-                info.name,
+                info.name.to_string(),
                 TextStyle {
-                    font_size: 11.0,
+                    font_size: 13.0,
                     color: Color::srgb(0.95, 0.95, 0.95),
                     ..default()
                 },
@@ -1138,7 +1189,7 @@ fn menu_button(parent: &mut ChildBuilder, tool: Tool, player: &PlayerState) {
             p.spawn(TextBundle::from_section(
                 format!("${}", info.cost.credits),
                 TextStyle {
-                    font_size: 10.0,
+                    font_size: 12.0,
                     color: if affordable {
                         Color::srgb(0.85, 0.95, 0.7)
                     } else {
@@ -1148,10 +1199,18 @@ fn menu_button(parent: &mut ChildBuilder, tool: Tool, player: &PlayerState) {
                 },
             ));
             p.spawn(TextBundle::from_section(
-                info.description,
+                info.description.to_string(),
                 TextStyle {
-                    font_size: 8.0,
-                    color: Color::srgb(0.82, 0.86, 0.92),
+                    font_size: 10.0,
+                    color: Color::srgb(0.6, 0.65, 0.72),
+                    ..default()
+                },
+            ));
+            p.spawn(TextBundle::from_section(
+                if affordable { "Click to assign" } else { "Not enough credits" },
+                TextStyle {
+                    font_size: 9.0,
+                    color: Color::srgb(0.75, 0.75, 0.8),
                     ..default()
                 },
             ));
@@ -1202,46 +1261,6 @@ fn contract_button(parent: &mut ChildBuilder, item_kind: u16, contract: &Contrac
                     ..default()
                 },
             ));
-        });
-}
-
-fn menu_category(
-    parent: &mut ChildBuilder,
-    category: ToolCategory,
-    tools: &[Tool],
-    player: &PlayerState,
-) {
-    parent
-        .spawn(NodeBundle {
-            style: Style {
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::Center,
-                margin: UiRect::all(Val::Px(8.0)),
-                ..default()
-            },
-            ..default()
-        })
-        .with_children(|p| {
-            p.spawn(TextBundle::from_section(
-                category.name(),
-                TextStyle {
-                    font_size: 14.0,
-                    color: Color::srgb(0.8, 0.85, 0.92),
-                    ..default()
-                },
-            ));
-            p.spawn(NodeBundle {
-                style: Style {
-                    flex_direction: FlexDirection::Row,
-                    ..default()
-                },
-                ..default()
-            })
-            .with_children(|row| {
-                for &tool in tools {
-                    menu_button(row, tool, player);
-                }
-            });
         });
 }
 
@@ -1310,6 +1329,7 @@ pub fn open_build_menu(
             .collect()
     };
     let groups = collect_by_category(&available_tools);
+
     commands
         .spawn((
             NodeBundle {
@@ -1321,51 +1341,123 @@ pub fn open_build_menu(
                     align_items: AlignItems::Center,
                     ..default()
                 },
-                background_color: Color::srgba(0.0, 0.0, 0.0, 0.65).into(),
+                background_color: Color::srgba(0.0, 0.0, 0.0, 0.75).into(),
                 ..default()
             },
             MenuRoot,
         ))
         .with_children(|root| {
-            root.spawn(TextBundle::from_section(
-                format!("Build Menu (Q/Esc to close)\nSelected slot {}: {}",
-                    if hotbar.selected == 9 { "0" } else { &["1","2","3","4","5","6","7","8","9"][hotbar.selected] },
-                    selected_label),
-                TextStyle {
-                    font_size: 18.0,
-                    color: Color::srgb(0.9, 0.9, 0.95),
-                    ..default()
-                },
-            ));
+            // Main card.
             root.spawn(NodeBundle {
                 style: Style {
-                    position_type: PositionType::Absolute,
-                    top: Val::Px(44.0),
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    ..default()
-                },
-                ..default()
-            })
-            .with_children(|contracts| {
-                for item_kind in crate::economy::CONTRACT_ITEMS {
-                    contract_button(contracts, item_kind, contract);
-                }
-            });
-            root.spawn(NodeBundle {
-                style: Style {
-                    position_type: PositionType::Absolute,
-                    top: Val::Px(110.0),
+                    width: Val::Percent(90.0),
+                    height: Val::Percent(85.0),
                     flex_direction: FlexDirection::Column,
-                    align_items: AlignItems::Center,
+                    padding: UiRect::all(Val::Px(16.0)),
                     ..default()
                 },
+                background_color: Color::srgba(0.08, 0.09, 0.11, 0.98).into(),
                 ..default()
             })
-            .with_children(|body| {
-                for (cat, tools) in groups {
-                    menu_category(body, cat, &tools, &player);
-                }
+            .with_children(|panel| {
+                let slot_key = if hotbar.selected == 9 {
+                    "0"
+                } else {
+                    &["1", "2", "3", "4", "5", "6", "7", "8", "9"][hotbar.selected]
+                };
+                panel.spawn(TextBundle::from_section(
+                    format!(
+                        "Build Menu (Q/Esc to close)   |   Selected slot {}: {}",
+                        slot_key, selected_label
+                    ),
+                    TextStyle {
+                        font_size: 18.0,
+                        color: Color::srgb(0.9, 0.9, 0.95),
+                        ..default()
+                    },
+                ));
+
+                // Contract row.
+                panel
+                    .spawn(NodeBundle {
+                        style: Style {
+                            flex_direction: FlexDirection::Row,
+                            margin: UiRect::vertical(Val::Px(8.0)),
+                            ..default()
+                        },
+                        ..default()
+                    })
+                    .with_children(|contracts| {
+                        for item_kind in crate::economy::CONTRACT_ITEMS {
+                            contract_button(contracts, item_kind, contract);
+                        }
+                    });
+
+                // Scrollable list of categories and tool cards.
+                panel
+                    .spawn((
+                        NodeBundle {
+                            style: Style {
+                                height: Val::Percent(100.0),
+                                overflow: Overflow::clip_y(),
+                                ..default()
+                            },
+                            background_color: Color::srgba(0.04, 0.05, 0.06, 0.95).into(),
+                            ..default()
+                        },
+                        MenuScrollPanel,
+                    ))
+                    .with_children(|scroll| {
+                        scroll
+                            .spawn((
+                                NodeBundle {
+                                    style: Style {
+                                        position_type: PositionType::Absolute,
+                                        top: Val::Px(0.0),
+                                        left: Val::Px(0.0),
+                                        right: Val::Px(0.0),
+                                        flex_direction: FlexDirection::Column,
+                                        ..default()
+                                    },
+                                    ..default()
+                                },
+                                MenuScrollContent,
+                            ))
+                            .with_children(|body| {
+                                for (cat, tools) in groups {
+                                    body.spawn(TextBundle::from_section(
+                                        cat.name(),
+                                        TextStyle {
+                                            font_size: 16.0,
+                                            color: Color::srgb(0.85, 0.9, 0.95),
+                                            ..default()
+                                        },
+                                    )
+                                    .with_style(Style {
+                                        margin: UiRect::new(
+                                            Val::Px(8.0),
+                                            Val::Px(0.0),
+                                            Val::Px(16.0),
+                                            Val::Px(4.0),
+                                        ),
+                                        ..default()
+                                    }));
+                                    body.spawn(NodeBundle {
+                                        style: Style {
+                                            flex_direction: FlexDirection::Row,
+                                            flex_wrap: FlexWrap::Wrap,
+                                            ..default()
+                                        },
+                                        ..default()
+                                    })
+                                    .with_children(|row| {
+                                        for tool in tools {
+                                            menu_button(row, tool, player);
+                                        }
+                                    });
+                                }
+                            });
+                    });
             });
         });
 }
