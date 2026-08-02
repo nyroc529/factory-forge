@@ -1102,10 +1102,10 @@ fn menu_button(parent: &mut ChildBuilder, tool: Tool, player: &PlayerState) {
                 .spawn((
                     ButtonBundle {
                         style: Style {
-                            width: Val::Px(180.0),
-                            height: Val::Px(130.0),
-                            margin: UiRect::all(Val::Px(6.0)),
-                            padding: UiRect::all(Val::Px(8.0)),
+                            width: Val::Px(210.0),
+                            height: Val::Px(160.0),
+                            margin: UiRect::all(Val::Px(8.0)),
+                            padding: UiRect::all(Val::Px(10.0)),
                             flex_direction: FlexDirection::Column,
                             justify_content: JustifyContent::FlexStart,
                             align_items: AlignItems::Center,
@@ -1120,7 +1120,7 @@ fn menu_button(parent: &mut ChildBuilder, tool: Tool, player: &PlayerState) {
                     p.spawn(TextBundle::from_section(
                         format!("[LOCKED] {}", info.name),
                         TextStyle {
-                            font_size: 13.0,
+                            font_size: 15.0,
                             color: name_color,
                             ..default()
                         },
@@ -1128,7 +1128,7 @@ fn menu_button(parent: &mut ChildBuilder, tool: Tool, player: &PlayerState) {
                     p.spawn(TextBundle::from_section(
                         format!("{} RP to unlock", tech.cost()),
                         TextStyle {
-                            font_size: 12.0,
+                            font_size: 14.0,
                             color: cost_color,
                             ..default()
                         },
@@ -1136,7 +1136,7 @@ fn menu_button(parent: &mut ChildBuilder, tool: Tool, player: &PlayerState) {
                     p.spawn(TextBundle::from_section(
                         info.description.to_string(),
                         TextStyle {
-                            font_size: 10.0,
+                            font_size: 12.0,
                             color: Color::srgb(0.6, 0.65, 0.72),
                             ..default()
                         },
@@ -1144,7 +1144,7 @@ fn menu_button(parent: &mut ChildBuilder, tool: Tool, player: &PlayerState) {
                     p.spawn(TextBundle::from_section(
                         if can_afford { "Click to research" } else { "Not enough RP" },
                         TextStyle {
-                            font_size: 9.0,
+                            font_size: 11.0,
                             color: Color::srgb(0.75, 0.75, 0.8),
                             ..default()
                         },
@@ -1163,10 +1163,10 @@ fn menu_button(parent: &mut ChildBuilder, tool: Tool, player: &PlayerState) {
         .spawn((
             ButtonBundle {
                 style: Style {
-                    width: Val::Px(180.0),
-                    height: Val::Px(130.0),
-                    margin: UiRect::all(Val::Px(6.0)),
-                    padding: UiRect::all(Val::Px(8.0)),
+                    width: Val::Px(210.0),
+                    height: Val::Px(160.0),
+                    margin: UiRect::all(Val::Px(8.0)),
+                    padding: UiRect::all(Val::Px(10.0)),
                     flex_direction: FlexDirection::Column,
                     justify_content: JustifyContent::FlexStart,
                     align_items: AlignItems::Center,
@@ -1181,7 +1181,7 @@ fn menu_button(parent: &mut ChildBuilder, tool: Tool, player: &PlayerState) {
             p.spawn(TextBundle::from_section(
                 info.name.to_string(),
                 TextStyle {
-                    font_size: 13.0,
+                    font_size: 15.0,
                     color: Color::srgb(0.95, 0.95, 0.95),
                     ..default()
                 },
@@ -1189,7 +1189,7 @@ fn menu_button(parent: &mut ChildBuilder, tool: Tool, player: &PlayerState) {
             p.spawn(TextBundle::from_section(
                 format!("${}", info.cost.credits),
                 TextStyle {
-                    font_size: 12.0,
+                    font_size: 14.0,
                     color: if affordable {
                         Color::srgb(0.85, 0.95, 0.7)
                     } else {
@@ -1201,7 +1201,7 @@ fn menu_button(parent: &mut ChildBuilder, tool: Tool, player: &PlayerState) {
             p.spawn(TextBundle::from_section(
                 info.description.to_string(),
                 TextStyle {
-                    font_size: 10.0,
+                    font_size: 12.0,
                     color: Color::srgb(0.6, 0.65, 0.72),
                     ..default()
                 },
@@ -1209,7 +1209,7 @@ fn menu_button(parent: &mut ChildBuilder, tool: Tool, player: &PlayerState) {
             p.spawn(TextBundle::from_section(
                 if affordable { "Click to assign" } else { "Not enough credits" },
                 TextStyle {
-                    font_size: 9.0,
+                    font_size: 11.0,
                     color: Color::srgb(0.75, 0.75, 0.8),
                     ..default()
                 },
