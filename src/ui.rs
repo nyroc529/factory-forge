@@ -1185,6 +1185,7 @@ pub fn open_build_menu(
     hotbar: &Hotbar,
     player: &PlayerState,
     contract: &ContractState,
+    victory: &VictoryState,
 ) {
     let selected_label = hotbar
         .slots[hotbar.selected]
@@ -1215,7 +1216,16 @@ pub fn open_build_menu(
         Tool::Turret,
         Tool::ForgeCore,
     ];
-    let groups = collect_by_category(ALL_TOOLS);
+    let available_tools: Vec<Tool> = if victory.achieved {
+        ALL_TOOLS.to_vec()
+    } else {
+        ALL_TOOLS
+            .iter()
+            .copied()
+            .filter(|&t| tech_for_tool(t) != Some(Tech::Creative))
+            .collect()
+    };
+    let groups = collect_by_category(&available_tools);
     commands
         .spawn((
             NodeBundle {
@@ -1284,6 +1294,7 @@ pub fn handle_menu_input(
     hotbar: Res<Hotbar>,
     player: Res<PlayerState>,
     contract: Res<ContractState>,
+    victory: Res<VictoryState>,
 ) {
     let toggle = keys.just_pressed(KeyCode::KeyQ) || keys.just_pressed(KeyCode::Tab);
     let close = keys.just_pressed(KeyCode::Escape);
@@ -1299,7 +1310,7 @@ pub fn handle_menu_input(
         commands.entity(e).despawn_recursive();
     }
     if menu.visible {
-        open_build_menu(commands, &hotbar, &player, &contract);
+        open_build_menu(commands, &hotbar, &player, &contract, &victory);
     }
 }
 

@@ -18,9 +18,9 @@ use bevy::window::{WindowMode, WindowResolution};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use belts::{BeltSim, BuildingKind, Dir, KINDS};
-use economy::{
-    is_tech_unlocked, item_value, shipment_value, ContractState, PlayerState, ProductionStats, Tech,
-    VictoryState,
+use crate::economy::{
+    is_tech_unlocked, item_value, shipment_value, unlock_tech, ContractState, PlayerState,
+    ProductionStats, Tech, VictoryState,
 };
 use grid::{Grid, CHUNK_SIZE};
 use render::{CameraTarget, TILE};
@@ -148,6 +148,7 @@ fn main() {
                 audio::update_volumes,
                 render::update_hud,
                 render::update_victory_overlay,
+                unlock_creative_on_victory,
                 rail::update_train_visuals,
                 combat::update_enemy_visuals,
                 telemetry::toggle_graph,
@@ -472,10 +473,20 @@ fn generate_ore_patches(grid: &mut Grid, rng: &mut StdRng) {
         }
     }
     stamp_ore_zone(grid, 130, 26, 7, 7);
-    stamp_ore_zone(grid, 130, 130, 8, 2);
-    stamp_ore_zone(grid, 26, 130, 8, 3);
 }
 
+/// Beating the game unlocks Creative/Sandbox tools (Source and Sink).
+fn unlock_creative_on_victory(
+    mut player: ResMut<economy::PlayerState>,
+    victory: Res<VictoryState>,
+) {
+    if victory.achieved && !is_tech_unlocked(player.tech_flags, Tech::Creative) {
+        unlock_tech(&mut player.tech_flags, Tech::Creative);
+        info!("Creative / sandbox mode unlocked!");
+    }
+}
+
+/// Place a circular ore patch.
 fn stamp_ore_zone(grid: &mut Grid, cx: i32, cy: i32, radius: i32, kind: u8) {
     for y in (cy - radius)..=(cy + radius) {
         for x in (cx - radius)..=(cx + radius) {

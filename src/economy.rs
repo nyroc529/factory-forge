@@ -387,6 +387,7 @@ pub enum Tech {
     RailLogistics,
     Combat,
     ForgeCore,
+    Creative,
 }
 
 impl Tech {
@@ -399,6 +400,7 @@ impl Tech {
             Tech::RailLogistics => 4,
             Tech::Combat => 5,
             Tech::ForgeCore => 6,
+            Tech::Creative => 7,
         }
     }
 
@@ -411,6 +413,7 @@ impl Tech {
             Tech::RailLogistics => 500,
             Tech::Combat => 400,
             Tech::ForgeCore => 1200,
+            Tech::Creative => 0,
         }
     }
 
@@ -423,6 +426,7 @@ impl Tech {
             Tech::RailLogistics => "Rail Logistics",
             Tech::Combat => "Defensive Systems",
             Tech::ForgeCore => "Forge Ascension",
+            Tech::Creative => "Sandbox Mode",
         }
     }
 
@@ -435,6 +439,7 @@ impl Tech {
             Tech::RailLogistics => "Unlocks rail tracks and train stations.",
             Tech::Combat => "Unlocks turrets for base defense.",
             Tech::ForgeCore => "Unlocks the staged Forge Core endgame project.",
+            Tech::Creative => "Unlocked by winning. Enables Source and Sink.",
         }
     }
 }
@@ -445,13 +450,13 @@ pub const fn tech_for_tool(tool: Tool) -> Option<Tech> {
         Tool::Splitter => Some(Tech::Splitter),
         Tool::Shipment => Some(Tech::Shipment),
         Tool::Generator | Tool::Pump | Tool::Tank => Some(Tech::PowerFluids),
+        Tool::Source | Tool::Sink => Some(Tech::Creative),
         Tool::Research2 | Tool::Research3 => Some(Tech::AdvancedResearch),
         Tool::RailTrack | Tool::RailStation => Some(Tech::RailLogistics),
         Tool::Turret => Some(Tech::Combat),
         Tool::ForgeCore => Some(Tech::ForgeCore),
-        Tool::Select | Tool::Paste | Tool::Belt | Tool::Inserter | Tool::Source | Tool::Sink
-        | Tool::Assembler | Tool::Miner | Tool::Storage | Tool::Pole | Tool::Pipe
-        | Tool::Research1 => None,
+        Tool::Select | Tool::Paste | Tool::Belt | Tool::Inserter | Tool::Assembler
+        | Tool::Miner | Tool::Storage | Tool::Pole | Tool::Pipe | Tool::Research1 => None,
     }
 }
 
