@@ -129,6 +129,7 @@ fn main() {
                 ui::handle_editor_input,
                 ui::save_load,
                 ui::update_hotbar,
+                ui::update_tool_info,
             )
                 .chain()
                 .in_set(UpdateInputSet)

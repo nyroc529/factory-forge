@@ -8,8 +8,8 @@ use crate::belts::{BuildingKind, Dir, INVALID};
 use crate::render::{dir_angle, WorldDirty, TILE};
 use crate::sim::rebuild_belt_graph;
 use crate::economy::{
-    is_tool_unlocked, tech_for_tool, tool_category, tool_info, unlock_tech, ContractState, PlayerState,
-    ProductionStats, Tech, ToolCategory, VictoryState,
+    is_tech_unlocked, is_tool_unlocked, tech_for_tool, tool_category, tool_info, unlock_tech,
+    ContractState, PlayerState, ProductionStats, Tech, ToolCategory, VictoryState,
 };
 use crate::{GameWorld, Sim};
 
@@ -33,15 +33,15 @@ impl Default for Hotbar {
         Self {
             slots: [
                 Some(Tool::Belt),
-                Some(Tool::Pole),
-                Some(Tool::Generator),
-                Some(Tool::Assembler),
                 Some(Tool::Inserter),
+                Some(Tool::Generator),
                 Some(Tool::Miner),
-                Some(Tool::Storage),
-                Some(Tool::Shipment),
-                Some(Tool::Splitter),
+                Some(Tool::Sink),
                 Some(Tool::Select),
+                None,
+                None,
+                None,
+                None,
             ],
             selected: 0,
         }
@@ -888,6 +888,12 @@ pub fn save_load(
 
 // ---------------------------------------------------------------- UI systems
 
+#[derive(Component)]
+pub struct ToolInfoPanel;
+
+#[derive(Component)]
+pub struct TutorialPrompt;
+
 pub fn setup_hotbar(mut commands: Commands) {
     commands
         .spawn(NodeBundle {
@@ -933,6 +939,84 @@ pub fn setup_hotbar(mut commands: Commands) {
                     });
             }
         });
+
+    // Info bar above the hotbar: name, description, cost, and unlock status.
+    commands.spawn((
+        TextBundle {
+            text: Text::from_section(
+                "",
+                TextStyle {
+                    font_size: 14.0,
+                    color: Color::srgb(0.9, 0.9, 0.95),
+                    ..default()
+                },
+            ),
+            style: Style {
+                position_type: PositionType::Absolute,
+                bottom: Val::Px(64.0),
+                left: Val::Px(0.0),
+                right: Val::Px(0.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            ..default()
+        },
+        ToolInfoPanel,
+    ));
+
+    // Persistent objective hint at the top of the screen.
+    commands.spawn((
+        TextBundle {
+            text: Text::from_section(
+                "Mine ore -> transport it -> dump it in the Scrap Pit for credits -> unlock tech with Research Labs",
+                TextStyle {
+                    font_size: 13.0,
+                    color: Color::srgb(0.75, 0.8, 0.85),
+                    ..default()
+                },
+            ),
+            style: Style {
+                position_type: PositionType::Absolute,
+                top: Val::Px(8.0),
+                left: Val::Px(0.0),
+                right: Val::Px(0.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            ..default()
+        },
+        TutorialPrompt,
+    ));
+}
+
+pub fn update_tool_info(
+    hotbar: Res<Hotbar>,
+    player: Res<PlayerState>,
+    mut query: Query<&mut Text, With<ToolInfoPanel>>,
+) {
+    if let Ok(mut text) = query.get_single_mut() {
+        let value = if let Some(tool) = hotbar.slots[hotbar.selected] {
+            let info = tool_info(tool);
+            let rp = if let Some(tech) = tech_for_tool(tool) {
+                if is_tech_unlocked(player.tech_flags, tech) {
+                    "unlocked".to_string()
+                } else {
+                    format!("{} RP to unlock", tech.cost())
+                }
+            } else {
+                "unlocked".to_string()
+            };
+            format!(
+                "{}: {}    |    Cost: ${}    |    {}",
+                info.name, info.description, info.cost.credits, rp
+            )
+        } else {
+            "Empty slot — open the build menu (Q / Tab) to assign a tool.".to_string()
+        };
+        text.sections[0].value = value;
+    }
 }
 
 pub fn update_hotbar(
