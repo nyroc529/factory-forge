@@ -51,28 +51,109 @@ fn write_wav(path: &str, samples: &[i16], sample_rate: u32) {
 
 fn ambient_samples() -> Vec<i16> {
     let sample_rate = 44100;
-    let seconds = 8;
+    let seconds = 16;
     let count = sample_rate * seconds;
     let tau = std::f32::consts::TAU;
-    // C-minor chord drone.
-    let chord = [130.81_f32, 155.56, 196.00];
-    // Slow pentatonic arpeggio over the chord (half-second notes).
-    let melody = [130.81_f32, 155.56, 196.00, 233.08, 261.63, 233.08, 196.00, 155.56];
-    let step = sample_rate / 2;
-    (0..count)
-        .map(|i| {
+
+    // D-minor / dark ambient palette.
+    let root: f32 = 73.42; // D2
+    let bass = [root, root * 1.5]; // D2 + A2 drone
+    let chord_progression = [
+        [root * 2.0, root * 2.5, root * 3.0],       // Dm
+        [root * 1.5, root * 2.0, root * 2.5],       // Am
+        [root * 1.75, root * 2.25, root * 2.75],    // Gm-ish
+        [root * 2.0, root * 2.5, root * 3.0],       // Dm
+    ];
+    let melody = [
+        (root * 2.0, 1.0), (root * 2.5, 1.0), (0.0, 1.0),
+        (root * 2.25, 1.0), (root * 2.0, 1.0), (root * 1.75, 1.0),
+        (0.0, 1.0), (root * 1.5, 1.0),
+    ];
+
+    let bpm = 70.0;
+    let beat = (60.0 / bpm) * sample_rate as f32;
+
+    // Soft triangle oscillator (less buzzy than saw, darker than sine).
+    let tri = |phase: f32| -> f32 {
+        let p = phase - phase.floor();
+        4.0 * (p - 0.5).abs() - 1.0
+    };
+
+    // ADSR-ish envelope scaled to note length.
+    let amp_env = |t: f32, duration: f32| -> f32 {
+        if t < 0.0 || t >= duration {
+            return 0.0;
+        }
+        let attack = duration * 0.15;
+        let release = duration * 0.35;
+        if t < attack {
+            t / attack
+        } else if t > duration - release {
+            1.0 - (t - (duration - release)) / release
+        } else {
+            1.0
+        }
+    };
+
+    let mut out = vec![0.0_f32; count];
+
+    // Bass drone: two low detuned oscillators, slow pulse.
+    for i in 0..count {
+        let t = i as f32 / sample_rate as f32;
+        let mut v = 0.0_f32;
+        for f in bass {
+            v += 0.6 * (t * f * tau).sin();
+            v += 0.4 * tri(t * (f + 0.25) + 0.13);
+        }
+        let pulse = 0.55 + 0.45 * (t * 0.15 * tau).sin();
+        out[i] += v * pulse * 0.18;
+    }
+
+    // Dark pad: chord progression, one chord every 4 beats.
+    let measures = 4;
+    let beats_per_measure = 4;
+    let chord_duration = beat * beats_per_measure as f32;
+    for m in 0..measures {
+        let chord = chord_progression[m % chord_progression.len()];
+        let start = (m as f32 * chord_duration) as usize;
+        let end = ((m + 1) as f32 * chord_duration) as usize;
+        for i in start..end.min(count) {
+            let t_local = (i - start) as f32 / sample_rate as f32;
+            let env = amp_env(t_local, chord_duration / sample_rate as f32);
             let t = i as f32 / sample_rate as f32;
             let mut v = 0.0_f32;
-            for f in chord {
-                v += (t * f * tau).sin();
+            for &f in &chord {
+                v += tri(t * f + m as f32 * 0.1);
+                // slight detune for thickness
+                v += 0.5 * tri(t * (f + 0.4));
             }
-            let note_idx = (i / step) % melody.len();
-            let f = melody[note_idx];
-            v += 0.6 * (t * f * tau).sin();
-            // Gentle swell so it breathes instead of droning flatly.
-            let pulse = 0.65 + 0.35 * (t * 0.2 * tau).sin();
-            v *= pulse * 0.12 / chord.len() as f32;
-            (v * i16::MAX as f32) as i16
+            out[i] += v * env * 0.10;
+        }
+    }
+
+    // Sparse melody: half-note phrases.
+    let mut melody_time = 0.0_f32;
+    for &(freq, beats) in &melody {
+        let duration = beats * beat;
+        if freq > 0.0 {
+            let start = melody_time as usize;
+            let end = (melody_time + duration) as usize;
+            for i in start..end.min(count) {
+                let t_local = (i - start) as f32 / sample_rate as f32;
+                let t = i as f32 / sample_rate as f32;
+                let env = amp_env(t_local, duration / sample_rate as f32);
+                let v = 0.5 * tri(t * freq) + 0.5 * (t * freq * tau).sin();
+                out[i] += v * env * 0.12;
+            }
+        }
+        melody_time += duration;
+    }
+
+    // Final normalization and output.
+    out.into_iter()
+        .map(|v| {
+            let clamped = v.clamp(-1.0, 1.0);
+            (clamped * i16::MAX as f32) as i16
         })
         .collect()
 }
