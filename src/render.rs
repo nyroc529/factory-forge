@@ -149,6 +149,156 @@ fn lin_a(c: Color, a: f32) -> [f32; 4] {
     v
 }
 
+/// Draw a small symbolic icon on top of each building so players can tell
+/// machines apart at a glance. Unpowered buildings get a dimmed icon.
+fn draw_building_icon(
+    batch: &mut MeshBatch,
+    c: Vec2,
+    half: f32,
+    kind: BuildingKind,
+    dir: Dir,
+    powered: bool,
+) {
+    let alpha = if powered { 1.0 } else { 0.35 };
+    let s = |r: f32, g: f32, b: f32| lin_a(Color::srgb(r, g, b), alpha);
+    let pi = std::f32::consts::PI;
+
+    match kind {
+        BuildingKind::Miner => {
+            // Yellow drill head on a dark bar.
+            batch.ngon(
+                c + Vec2::new(0.0, half * 0.1),
+                half * 0.35,
+                3,
+                pi,
+                s(0.95, 0.85, 0.25),
+            );
+            batch.line(
+                c + Vec2::new(-half * 0.35, -half * 0.25),
+                c + Vec2::new(half * 0.35, -half * 0.25),
+                half * 0.12,
+                s(0.5, 0.5, 0.55),
+            );
+        }
+        BuildingKind::Assembler => {
+            // Gear-like hexagon with a center hub.
+            let gear = s(0.75, 0.75, 0.8);
+            batch.ngon(c, half * 0.35, 6, 0.0, gear);
+            batch.ngon(c, half * 0.12, 6, 0.0, s(0.25, 0.25, 0.3));
+        }
+        BuildingKind::Inserter => {
+            // Arm reaching toward the output direction.
+            let (dx, dy) = dir.fvec();
+            let tip = c + Vec2::new(dx, dy) * half * 0.55;
+            let base = c - Vec2::new(dx, dy) * half * 0.4;
+            batch.line(base, tip, half * 0.12, s(0.9, 0.9, 0.95));
+        }
+        BuildingKind::Storage => {
+            // Crate "X".
+            let x = s(0.8, 0.8, 0.85);
+            batch.line(
+                c + Vec2::new(-half * 0.3, -half * 0.3),
+                c + Vec2::new(half * 0.3, half * 0.3),
+                half * 0.1,
+                x,
+            );
+            batch.line(
+                c + Vec2::new(half * 0.3, -half * 0.3),
+                c + Vec2::new(-half * 0.3, half * 0.3),
+                half * 0.1,
+                x,
+            );
+        }
+        BuildingKind::Shipment => {
+            // Arrow pointing the output direction.
+            let (dx, dy) = dir.fvec();
+            let tip = c + Vec2::new(dx, dy) * half * 0.5;
+            let back = c - Vec2::new(dx, dy) * half * 0.2;
+            let perp = Vec2::new(-dy, dx) * half * 0.25;
+            let arr = s(0.95, 0.95, 1.0);
+            batch.line(back + perp, tip, half * 0.1, arr);
+            batch.line(back - perp, tip, half * 0.1, arr);
+        }
+        BuildingKind::Generator => {
+            // Lightning bolt symbol.
+            let bolt = s(0.15, 0.12, 0.04);
+            let a = c + Vec2::new(-half * 0.15, half * 0.35);
+            let b = c + Vec2::new(half * 0.05, half * 0.0);
+            let d = c + Vec2::new(-half * 0.05, half * 0.0);
+            let e = c + Vec2::new(half * 0.15, -half * 0.35);
+            batch.line(a, b, half * 0.13, bolt);
+            batch.line(d, e, half * 0.13, bolt);
+        }
+        BuildingKind::Pole => {
+            // Crossbar on the power pole.
+            let bar = s(0.85, 0.85, 0.9);
+            batch.line(
+                c + Vec2::new(-half * 0.3, 0.0),
+                c + Vec2::new(half * 0.3, 0.0),
+                half * 0.1,
+                bar,
+            );
+            batch.line(
+                c + Vec2::new(0.0, -half * 0.3),
+                c + Vec2::new(0.0, half * 0.3),
+                half * 0.1,
+                bar,
+            );
+        }
+        BuildingKind::Pump => {
+            // Water-drop triangle.
+            batch.ngon(c, half * 0.3, 3, 0.0, s(0.35, 0.6, 0.85));
+        }
+        BuildingKind::Tank => {
+            // Fluid level line.
+            batch.line(
+                c + Vec2::new(-half * 0.35, 0.0),
+                c + Vec2::new(half * 0.35, 0.0),
+                half * 0.15,
+                s(0.35, 0.6, 0.85),
+            );
+        }
+        BuildingKind::Lab => {
+            // Flask triangle.
+            batch.ngon(
+                c + Vec2::new(0.0, -half * 0.1),
+                half * 0.35,
+                3,
+                0.0,
+                s(0.5, 0.8, 0.7),
+            );
+        }
+        BuildingKind::Turret => {
+            // Crosshair + center square.
+            let red = s(0.9, 0.2, 0.2);
+            batch.line(
+                c + Vec2::new(-half * 0.35, 0.0),
+                c + Vec2::new(half * 0.35, 0.0),
+                half * 0.1,
+                red,
+            );
+            batch.line(
+                c + Vec2::new(0.0, -half * 0.35),
+                c + Vec2::new(0.0, half * 0.35),
+                half * 0.1,
+                red,
+            );
+            batch.ngon(c, half * 0.15, 4, 0.0, red);
+        }
+        BuildingKind::ForgeCore => {
+            // Glowing diamond core.
+            batch.ngon(
+                c,
+                half * 0.35,
+                4,
+                std::f32::consts::FRAC_PI_4,
+                glow(Color::srgb(0.9, 0.4, 0.8), 2.0),
+            );
+        }
+        _ => {}
+    }
+}
+
 fn empty_mesh() -> Mesh {
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
@@ -415,6 +565,16 @@ pub fn rebuild_static_mesh(
         let (dx, dy) = sim.0.bld_dir[i].fvec();
         let notch = c + Vec2::new(dx, dy) * TILE * 0.32;
         batch.quad(notch, TILE * 0.10, TILE * 0.16, angle, lin(Color::srgb(0.9, 0.9, 0.95)));
+
+        // Simple iconic silhouettes so buildings read as machinery.
+        draw_building_icon(
+            &mut batch,
+            c,
+            half,
+            sim.0.bld_kind[i],
+            sim.0.bld_dir[i],
+            sim.0.bld_powered[i],
+        );
 
         // Pipe connections between adjacent fluid nodes.
         if sim.0.bld_fluid_capacity[i] > 0 {

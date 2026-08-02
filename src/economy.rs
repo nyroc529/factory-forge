@@ -16,10 +16,12 @@ pub struct PlayerState {
 
 impl PlayerState {
     pub fn with_starting_funds() -> Self {
+        let mut flags = 0u64;
+        unlock_tech(&mut flags, Tech::PowerFluids);
         Self {
             credits: 500,
             research_points: 0,
-            tech_flags: 0,
+            tech_flags: flags,
         }
     }
 }

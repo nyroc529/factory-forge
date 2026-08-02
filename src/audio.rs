@@ -51,16 +51,28 @@ fn write_wav(path: &str, samples: &[i16], sample_rate: u32) {
 
 fn ambient_samples() -> Vec<i16> {
     let sample_rate = 44100;
-    let seconds = 4;
+    let seconds = 8;
     let count = sample_rate * seconds;
+    let tau = std::f32::consts::TAU;
+    // C-minor chord drone.
+    let chord = [130.81_f32, 155.56, 196.00];
+    // Slow pentatonic arpeggio over the chord (half-second notes).
+    let melody = [130.81_f32, 155.56, 196.00, 233.08, 261.63, 233.08, 196.00, 155.56];
+    let step = sample_rate / 2;
     (0..count)
         .map(|i| {
             let t = i as f32 / sample_rate as f32;
-            let fundamental = (t * 110.0 * std::f32::consts::TAU).sin();
-            let harmonic = (t * 220.0 * std::f32::consts::TAU).sin() * 0.5;
-            let pulse = 0.6 + 0.4 * (t * 0.5 * std::f32::consts::TAU).sin();
-            let v = (fundamental + harmonic) * pulse * 0.25 * i16::MAX as f32;
-            v as i16
+            let mut v = 0.0_f32;
+            for f in chord {
+                v += (t * f * tau).sin();
+            }
+            let note_idx = (i / step) % melody.len();
+            let f = melody[note_idx];
+            v += 0.6 * (t * f * tau).sin();
+            // Gentle swell so it breathes instead of droning flatly.
+            let pulse = 0.65 + 0.35 * (t * 0.2 * tau).sin();
+            v *= pulse * 0.12 / chord.len() as f32;
+            (v * i16::MAX as f32) as i16
         })
         .collect()
 }

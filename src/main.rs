@@ -431,6 +431,11 @@ fn build_demo_world() -> (BeltSim, Grid) {
     // Miner on ore.
     let _miner = add(&mut sim, &mut grid, 10, 10, Dir::East, belts::BuildingKind::Miner);
 
+    // Starter power so the factory actually runs.
+    let gen = add(&mut sim, &mut grid, 10, 12, Dir::East, belts::BuildingKind::Generator);
+    sim.bld_param[gen as usize] = 20;
+    let _pole = add(&mut sim, &mut grid, 16, 11, Dir::East, belts::BuildingKind::Pole);
+
     sim::rebuild_belt_graph(&mut sim, &grid);
     (sim, grid)
 }
