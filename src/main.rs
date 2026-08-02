@@ -43,16 +43,21 @@ struct FluidScratch {
     net_count: usize,
 }
 
-fn ensure_cwd_is_project_root() {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(project) = exe.parent().and_then(|p| p.parent()).and_then(|p| p.parent()) {
-            let _ = std::env::set_current_dir(project);
-        }
+fn setup_paths() {
+    let project_root = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().and_then(|p| p.parent()).and_then(|p| p.parent()).map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
+    let _ = std::env::set_current_dir(&project_root);
+
+    if std::env::var("BEVY_ASSET_ROOT").is_err() {
+        std::env::set_var("BEVY_ASSET_ROOT", &project_root);
     }
 }
 
 fn main() {
-    ensure_cwd_is_project_root();
+    setup_paths();
     audio::ensure_audio_assets();
 
     let game_settings = settings::load();

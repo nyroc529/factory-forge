@@ -2,7 +2,7 @@ use bevy::audio::{PlaybackMode, Volume};
 use bevy::prelude::*;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
-use std::path::Path;
+use std::path::PathBuf;
 
 use crate::settings::Settings;
 
@@ -81,16 +81,26 @@ fn click_samples() -> Vec<i16> {
 }
 
 pub fn ensure_audio_assets() {
-    fs::create_dir_all(ASSETS_DIR).ok();
+    let base = std::env::var("BEVY_ASSET_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(|p| p.to_path_buf()))
+                .unwrap_or_else(|| PathBuf::from("."))
+        });
 
-    let ambient_path = format!("{ASSETS_DIR}/ambient.wav");
-    let click_path = format!("{ASSETS_DIR}/click.wav");
+    let dir = base.join(ASSETS_DIR);
+    fs::create_dir_all(&dir).ok();
 
-    if !Path::new(&ambient_path).exists() {
-        write_wav(&ambient_path, &ambient_samples(), 44100);
+    let ambient_path = dir.join("ambient.wav");
+    let click_path = dir.join("click.wav");
+
+    if !ambient_path.exists() {
+        write_wav(ambient_path.to_str().unwrap(), &ambient_samples(), 44100);
     }
-    if !Path::new(&click_path).exists() {
-        write_wav(&click_path, &click_samples(), 44100);
+    if !click_path.exists() {
+        write_wav(click_path.to_str().unwrap(), &click_samples(), 44100);
     }
 }
 
