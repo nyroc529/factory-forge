@@ -5,10 +5,12 @@ mod grid;
 mod rail;
 mod render;
 mod settings;
+mod settings_ui;
 mod sim;
 mod ui;
 mod replay;
 mod telemetry;
+mod audio;
 
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::prelude::*;
@@ -41,7 +43,18 @@ struct FluidScratch {
     net_count: usize,
 }
 
+fn ensure_cwd_is_project_root() {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(project) = exe.parent().and_then(|p| p.parent()).and_then(|p| p.parent()) {
+            let _ = std::env::set_current_dir(project);
+        }
+    }
+}
+
 fn main() {
+    ensure_cwd_is_project_root();
+    audio::ensure_audio_assets();
+
     let game_settings = settings::load();
     let (sim, grid) = build_demo_world();
 
@@ -68,6 +81,7 @@ fn main() {
             }),
         )
         .add_plugins(FrameTimeDiagnosticsPlugin)
+        .init_state::<AppState>()
         .insert_resource(ClearColor(Color::srgb(0.055, 0.065, 0.085)))
         .insert_resource(Time::<Fixed>::from_hz(60.0))
         .insert_resource(Sim(sim))
@@ -88,8 +102,16 @@ fn main() {
         .init_resource::<replay::ReplayLog>()
         .init_resource::<telemetry::Telemetry>()
         .init_resource::<telemetry::GraphVisible>()
-        .add_systems(Startup, (render::setup_scene, ui::setup_ghost, ui::setup_hotbar, telemetry::setup_graph))
-        .add_systems(FixedUpdate, (run_sim, telemetry::record, replay::record).chain())
+        .init_resource::<settings_ui::SettingsMenuVisible>()
+        .init_resource::<audio::SfxQueue>()
+        .add_systems(Startup, (setup_main_menu, render::setup_scene, ui::setup_ghost, ui::setup_hotbar, telemetry::setup_graph, settings_ui::setup_settings_ui, audio::setup_audio))
+        .add_systems(
+            FixedUpdate,
+            (run_sim, telemetry::record, replay::record)
+                .chain()
+                .run_if(in_state(AppState::Playing)),
+        )
+        .add_systems(Update, (menu_input, update_main_menu_visibility))
         .add_systems(
             Update,
             (
@@ -101,21 +123,110 @@ fn main() {
                 ui::handle_editor_input,
                 ui::save_load,
                 ui::update_hotbar,
+            )
+                .chain()
+                .in_set(UpdateInputSet)
+                .run_if(in_state(AppState::Playing)),
+        )
+        .add_systems(
+            Update,
+            (
                 render::rebuild_static_mesh,
                 render::build_dynamic_mesh,
                 render::camera_control,
                 render::toggle_bloom,
+                settings_ui::toggle_settings_ui,
+                settings_ui::update_settings_ui,
+                settings_ui::apply_settings,
+                audio::play_dirty_sfx,
+                audio::play_sfx,
+                audio::update_volumes,
                 render::update_hud,
                 render::update_victory_overlay,
                 rail::update_train_visuals,
                 combat::update_enemy_visuals,
                 telemetry::toggle_graph,
                 telemetry::update_graph_overlay,
-                settings::save_system,
             )
-                .chain(),
+                .chain()
+                .in_set(UpdateOutputSet)
+                .after(UpdateInputSet)
+                .run_if(in_state(AppState::Playing)),
         )
+        .add_systems(Update, settings::save_system)
         .run();
+}
+
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+struct UpdateInputSet;
+
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+struct UpdateOutputSet;
+
+#[derive(States, Clone, Copy, Default, Eq, PartialEq, Hash, Debug)]
+pub enum AppState {
+    #[default]
+    MainMenu,
+    Playing,
+}
+
+#[derive(Component)]
+struct MainMenuOverlay;
+
+fn setup_main_menu(mut commands: Commands) {
+    commands.spawn((
+        TextBundle::from_section(
+            "FACTORY FORGE\n\nPress Enter to start\nPress Esc to return here\nPress Q to quit",
+            TextStyle {
+                font_size: 32.0,
+                color: Color::srgb(0.9, 0.92, 0.96),
+                ..default()
+            },
+        )
+        .with_text_justify(JustifyText::Center)
+        .with_style(Style {
+            position_type: PositionType::Absolute,
+            top: Val::Percent(30.0),
+            left: Val::Percent(25.0),
+            width: Val::Percent(50.0),
+            ..default()
+        }),
+        MainMenuOverlay,
+    ));
+}
+
+fn menu_input(
+    state: Res<State<AppState>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut next_state: ResMut<NextState<AppState>>,
+    mut exit: EventWriter<AppExit>,
+) {
+    if *state.get() == AppState::MainMenu {
+        if keys.just_pressed(KeyCode::Enter) {
+            next_state.set(AppState::Playing);
+        }
+        if keys.just_pressed(KeyCode::KeyQ) {
+            exit.send(AppExit::Success);
+        }
+    } else if *state.get() == AppState::Playing {
+        if keys.just_pressed(KeyCode::Escape) {
+            next_state.set(AppState::MainMenu);
+        }
+    }
+}
+
+fn update_main_menu_visibility(
+    state: Res<State<AppState>>,
+    mut query: Query<&mut Visibility, With<MainMenuOverlay>>,
+) {
+    let target = if *state.get() == AppState::MainMenu {
+        Visibility::Visible
+    } else {
+        Visibility::Hidden
+    };
+    for mut vis in query.iter_mut() {
+        *vis = target;
+    }
 }
 
 fn run_sim(

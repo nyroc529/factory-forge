@@ -10,12 +10,14 @@ Done:
 - Replay buffer: snapshots every 5 seconds, F6 saves to factory.replay.
 - Release build succeeds; Desktop launcher runs target/release/factory-forge.
 
+Done:
+- In-game settings UI (O to toggle, -/= adjust volume, F fullscreen, B bloom).
+- Audio: procedural ambient WAV loop and placement SFX, with master/music/sfx volume.
+- Main menu / game states (Enter to play, Esc for menu, Q to quit).
+
 In progress:
-- In-game settings UI.
-- Audio: ambient + SFX (placeholder procedural WAVs).
-- Main menu / game states.
+- Final release build.
+- Playtest pass.
 
 Next:
-- Finish settings UI and audio.
-- Add main menu.
 - Final release build, playtest, push GitHub tag v0.1.0.
