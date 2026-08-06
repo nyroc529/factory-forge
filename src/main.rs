@@ -110,7 +110,7 @@ fn main() {
         .init_resource::<telemetry::GraphVisible>()
         .init_resource::<settings_ui::SettingsMenuVisible>()
         .init_resource::<audio::SfxQueue>()
-        .add_systems(Startup, (sprites::setup_sprites, setup_main_menu, render::setup_scene, ui::setup_ghost, ui::setup_hotbar, telemetry::setup_graph, settings_ui::setup_settings_ui, audio::setup_audio))
+        .add_systems(Startup, (sprites::setup_sprites, sprites::setup_decals, setup_main_menu, render::setup_scene, ui::setup_ghost, ui::setup_hotbar, telemetry::setup_graph, settings_ui::setup_settings_ui, audio::setup_audio))
         .add_systems(
             FixedUpdate,
             (run_sim, telemetry::record, replay::record)
@@ -143,9 +143,6 @@ fn main() {
                 render::build_dynamic_mesh,
                 render::camera_control,
                 render::toggle_bloom,
-                settings_ui::toggle_settings_ui,
-                settings_ui::update_settings_ui,
-                settings_ui::apply_settings,
                 audio::play_dirty_sfx,
                 audio::play_sfx,
                 audio::update_volumes,
@@ -163,6 +160,11 @@ fn main() {
                 .after(UpdateInputSet)
                 .run_if(in_state(AppState::Playing)),
         )
+        .add_systems(Update, (
+            settings_ui::toggle_settings_ui,
+            settings_ui::update_settings_ui,
+            settings_ui::apply_settings,
+        ))
         .add_systems(Update, settings::save_system)
         .run();
 }

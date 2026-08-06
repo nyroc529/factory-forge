@@ -954,10 +954,10 @@ pub fn setup_hotbar(mut commands: Commands) {
     commands.spawn((
         TextBundle {
             text: Text::from_section(
-                "Mine ore  ->  transport it  ->  dump it in the Scrap Pit  ->  unlock tech",
+                "Place a Miner on ore -> Belt it to a Scrap Pit -> Earn credits",
                 TextStyle {
-                    font_size: 13.0,
-                    color: Color::srgb(0.75, 0.8, 0.85),
+                    font_size: 14.0,
+                    color: Color::srgb(0.85, 0.9, 0.95),
                     ..default()
                 },
             ),
@@ -978,22 +978,24 @@ pub fn update_tutorial(
     stats: Res<ProductionStats>,
     victory: Res<VictoryState>,
     mut query: Query<&mut Text, With<TutorialPrompt>>,
+    mut last_msg: Local<&'static str>,
 ) {
-    if !player.is_changed() && !stats.is_changed() && !victory.is_changed() {
+    let msg = if victory.achieved {
+        "Victory achieved! Sandbox mode unlocked."
+    } else if stats.sold.iter().sum::<u64>() == 0 {
+        "Place a Miner on ore -> Belt it to a Scrap Pit -> Earn credits"
+    } else if player.research_points == 0 {
+        "Earning credits! Complete contracts (Q menu) to earn Research Points"
+    } else if player.tech_flags.count_ones() <= 1 {
+        "You have RP! Open the tech tree (Q) and unlock new buildings"
+    } else {
+        "Keep expanding: more production -> more contracts -> Forge Core to win!"
+    };
+    if *last_msg == msg {
         return;
     }
+    *last_msg = msg;
     if let Ok(mut text) = query.get_single_mut() {
-        let msg = if victory.achieved {
-            "Victory achieved! Sandbox mode unlocked."
-        } else if stats.sold.iter().sum::<u64>() == 0 {
-            "Place a Miner on ore -> Belt it to a Scrap Pit -> Earn credits"
-        } else if player.research_points == 0 {
-            "Earning credits! Complete contracts (Q menu) to earn Research Points"
-        } else if player.tech_flags.count_ones() <= 1 {
-            "You have RP! Open the tech tree (Q) and unlock new buildings"
-        } else {
-            "Keep expanding: more production -> more contracts -> Forge Core to win!"
-        };
         text.sections[0].value = msg.to_string();
     }
 }

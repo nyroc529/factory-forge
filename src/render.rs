@@ -139,6 +139,14 @@ fn lin(c: Color) -> [f32; 4] {
     c.to_linear().to_f32_array()
 }
 
+/// Fast deterministic hash for tile coordinates (decal placement).
+fn tile_hash(x: i32, y: i32) -> u32 {
+    let mut h = (x as u32).wrapping_mul(374761393)
+        .wrapping_add((y as u32).wrapping_mul(668265263));
+    h = (h ^ (h >> 13)).wrapping_mul(1274126177);
+    h ^ (h >> 16)
+}
+
 /// HDR-boosted color so bloom picks it up.
 fn glow(c: Color, boost: f32) -> [f32; 4] {
     let mut v = c.to_linear().to_f32_array();
@@ -194,6 +202,9 @@ pub struct VictoryOverlay;
 
 #[derive(Component)]
 pub struct BuildingSprite;
+
+#[derive(Component)]
+pub struct FloorDecal;
 
 // -------------------------------------------------------------------- setup
 
@@ -331,15 +342,20 @@ pub fn rebuild_static_mesh(
     world: Res<GameWorld>,
     mut commands: Commands,
     set: Res<BuildingSpriteSet>,
+    decal_set: Res<crate::sprites::DecalSpriteSet>,
     old_sprites: Query<Entity, With<BuildingSprite>>,
+    old_decals: Query<Entity, With<FloorDecal>>,
 ) {
     if !dirty.0 {
         return;
     }
     dirty.0 = false;
 
-    // Despawn the previous batch of building sprites before rebuilding.
+    // Despawn the previous batch of building sprites and decals before rebuilding.
     for e in old_sprites.iter() {
+        commands.entity(e).despawn_recursive();
+    }
+    for e in old_decals.iter() {
         commands.entity(e).despawn_recursive();
     }
 
@@ -393,6 +409,53 @@ pub fn rebuild_static_mesh(
                 _ => lin(Color::srgb(0.35, 0.25, 0.18)),
             };
             batch.quad(c, TILE * 0.43, TILE * 0.43, 0.0, ore_color);
+        }
+    }
+
+    // Floor decal sprites: scatter across empty tiles for visual variety.
+    let border = 2;
+    for y in border..world.0.height - border {
+        for x in border..world.0.width - border {
+            if world.0.ore_at(x, y) != 0 {
+                continue;
+            }
+            if world.0.belt_at(x, y) != INVALID {
+                continue;
+            }
+            if world.0.building_at(x, y) != INVALID {
+                continue;
+            }
+            let h = tile_hash(x, y);
+            let kind = h % 100;
+            if kind >= 28 {
+                continue;
+            }
+            let decal_idx = if kind < 8 {
+                0 // oil stain
+            } else if kind < 15 {
+                1 // cracks
+            } else if kind < 22 {
+                2 // bolt plate
+            } else {
+                3 // grate
+            };
+            let handle = decal_set.handles[decal_idx].clone();
+            let c = Vec2::new(x as f32 * TILE, y as f32 * TILE);
+            let angle = ((h >> 8) % 4) as f32 * std::f32::consts::FRAC_PI_2;
+            commands.spawn((
+                SpriteBundle {
+                    texture: handle,
+                    transform: Transform::from_translation(Vec3::new(c.x, c.y, -0.02))
+                        .with_rotation(Quat::from_rotation_z(angle)),
+                    sprite: Sprite {
+                        custom_size: Some(Vec2::splat(TILE * 0.8)),
+                        color: Color::srgba(1.0, 1.0, 1.0, 0.7),
+                        ..default()
+                    },
+                    ..default()
+                },
+                FloorDecal,
+            ));
         }
     }
 

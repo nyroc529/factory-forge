@@ -15,17 +15,18 @@ pub fn setup_settings_ui(mut commands: Commands) {
         TextBundle::from_section(
             "",
             TextStyle {
-                font_size: 16.0,
-                color: Color::srgb(0.9, 0.92, 0.96),
+                font_size: 18.0,
+                color: Color::srgb(0.95, 0.95, 0.98),
                 ..default()
             },
         )
         .with_style(Style {
             position_type: PositionType::Absolute,
-            left: Val::Px(12.0),
-            top: Val::Px(80.0),
+            left: Val::Px(16.0),
+            top: Val::Px(100.0),
             ..default()
-        }),
+        })
+        .with_background_color(Color::srgba(0.0, 0.0, 0.0, 0.85)),
         SettingsOverlay,
     ));
 }
@@ -56,16 +57,12 @@ pub fn update_settings_ui(
     mut settings: ResMut<Settings>,
     visible: Res<SettingsMenuVisible>,
     mut query: Query<&mut Text, With<SettingsOverlay>>,
-    mut counter: Local<u32>,
 ) {
-    *counter += 1;
-    if *counter % 6 != 0 {
-        return;
-    }
-
     if let Ok(mut text) = query.get_single_mut() {
         if !visible.0 {
-            text.sections[0].value.clear();
+            if !text.sections[0].value.is_empty() {
+                text.sections[0].value.clear();
+            }
             return;
         }
 
@@ -92,12 +89,14 @@ pub fn update_settings_ui(
 
         let pct = |v: f32| (v * 100.0).round() as i32;
         text.sections[0].value = format!(
-            "SETTINGS (O to close)\n\
-             Master:  {:3}%   - / =\n\
-             Music:   {:3}%   Shift + - / =\n\
-             SFX:     {:3}%   Ctrl + - / =\n\
-             Fullscreen: {}   (F)\n\
-             Bloom:      {}   (B)",
+            " SETTINGS (O to close)\n\
+             \n\
+              Master:  {:3}%   [ - / = ]\n\
+              Music:   {:3}%   [ Shift + - / = ]\n\
+              SFX:     {:3}%   [ Ctrl + - / = ]\n\
+             \n\
+              Fullscreen: {}   (F)\n\
+              Bloom:      {}   (B)\n ",
             pct(settings.master_volume),
             pct(settings.music_volume),
             pct(settings.sfx_volume),

@@ -322,3 +322,122 @@ fn draw_icon(pm: &mut tiny_skia::PixmapMut, kind: BuildingKind, accent: Color) {
         }
     }
 }
+
+// ======================= Floor Decal Sprites =======================
+
+const DECAL_SIZE: u32 = 48;
+
+#[derive(Resource)]
+pub struct DecalSpriteSet {
+    pub handles: Vec<Handle<Image>>,
+}
+
+/// Generate floor decal textures and store handles.
+pub fn setup_decals(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+    let generators: &[fn() -> Pixmap] = &[
+        draw_oil_stain,
+        draw_cracks,
+        draw_bolt_plate,
+        draw_grate,
+    ];
+    let mut handles = Vec::with_capacity(generators.len());
+    for gen in generators {
+        let pixmap = gen();
+        let image = Image::new(
+            Extent3d {
+                width: DECAL_SIZE,
+                height: DECAL_SIZE,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            pixmap.data().to_vec(),
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::default(),
+        );
+        handles.push(images.add(image));
+    }
+    commands.insert_resource(DecalSpriteSet { handles });
+}
+
+fn draw_oil_stain() -> Pixmap {
+    let mut pixmap = Pixmap::new(DECAL_SIZE, DECAL_SIZE).unwrap();
+    let mut pm = pixmap.as_mut();
+    pm.fill(Color::from_rgba8(0, 0, 0, 0));
+
+    // Irregular dark blotch made from overlapping circles.
+    let dark = Color::from_rgba8(18, 20, 25, 180);
+    let darker = Color::from_rgba8(10, 12, 16, 200);
+    fill_circle(&mut pm, 22.0, 24.0, 14.0, dark);
+    fill_circle(&mut pm, 28.0, 22.0, 10.0, darker);
+    fill_circle(&mut pm, 18.0, 28.0, 8.0, darker);
+    fill_circle(&mut pm, 26.0, 30.0, 6.0, dark);
+
+    pixmap
+}
+
+fn draw_cracks() -> Pixmap {
+    let mut pixmap = Pixmap::new(DECAL_SIZE, DECAL_SIZE).unwrap();
+    let mut pm = pixmap.as_mut();
+    pm.fill(Color::from_rgba8(0, 0, 0, 0));
+
+    let crack = Color::from_rgba8(30, 30, 35, 200);
+    // Main crack line with branches.
+    draw_line(&mut pm, 8.0, 12.0, 32.0, 38.0, crack, 2.0);
+    draw_line(&mut pm, 18.0, 22.0, 12.0, 34.0, crack, 1.5);
+    draw_line(&mut pm, 26.0, 30.0, 38.0, 28.0, crack, 1.5);
+    draw_line(&mut pm, 22.0, 26.0, 30.0, 18.0, crack, 1.2);
+    // Thinner hairline cracks.
+    let hair = Color::from_rgba8(25, 25, 30, 140);
+    draw_line(&mut pm, 14.0, 16.0, 6.0, 26.0, hair, 1.0);
+    draw_line(&mut pm, 30.0, 34.0, 40.0, 42.0, hair, 1.0);
+
+    pixmap
+}
+
+fn draw_bolt_plate() -> Pixmap {
+    let mut pixmap = Pixmap::new(DECAL_SIZE, DECAL_SIZE).unwrap();
+    let mut pm = pixmap.as_mut();
+    pm.fill(Color::from_rgba8(0, 0, 0, 0));
+
+    // A subtle raised plate with 4 corner bolts.
+    let plate = Color::from_rgba8(60, 65, 72, 120);
+    let bolt = Color::from_rgba8(140, 130, 100, 220);
+    let bolt_dark = Color::from_rgba8(80, 75, 60, 200);
+
+    // Plate outline.
+    if let Some(rect) = Rect::from_xywh(8.0, 8.0, 32.0, 32.0) {
+        stroke_rect(&mut pm, rect, plate, 1.5);
+    }
+
+    // Corner bolts (bright hex-ish circles).
+    for (bx, by) in [(12.0, 12.0), (36.0, 12.0), (12.0, 36.0), (36.0, 36.0)] {
+        fill_circle(&mut pm, bx, by, 3.5, bolt);
+        fill_circle(&mut pm, bx + 0.5, by + 0.5, 1.5, bolt_dark);
+    }
+
+    pixmap
+}
+
+fn draw_grate() -> Pixmap {
+    let mut pixmap = Pixmap::new(DECAL_SIZE, DECAL_SIZE).unwrap();
+    let mut pm = pixmap.as_mut();
+    pm.fill(Color::from_rgba8(0, 0, 0, 0));
+
+    // Dark rectangular vent with horizontal slats.
+    let frame = Color::from_rgba8(50, 55, 62, 220);
+    let void = Color::from_rgba8(8, 8, 12, 240);
+    let slat = Color::from_rgba8(70, 75, 82, 200);
+
+    // Outer frame.
+    if let Some(rect) = Rect::from_xywh(8.0, 12.0, 32.0, 24.0) {
+        fill_rect(&mut pm, rect, void);
+        stroke_rect(&mut pm, rect, frame, 2.0);
+    }
+    // Horizontal slats.
+    for i in 0..4 {
+        let y = 16.0 + i as f32 * 5.5;
+        draw_line(&mut pm, 10.0, y, 38.0, y, slat, 1.8);
+    }
+
+    pixmap
+}
