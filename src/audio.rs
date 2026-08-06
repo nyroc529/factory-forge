@@ -11,6 +11,8 @@ pub const ASSETS_DIR: &str = "assets/audio";
 #[derive(Clone, Copy)]
 pub enum SfxKind {
     Place,
+    Research,
+    Error,
 }
 
 #[derive(Resource, Default)]
@@ -21,6 +23,8 @@ pub struct AudioAssets {
     #[allow(dead_code)]
     pub ambient: Handle<AudioSource>,
     pub click: Handle<AudioSource>,
+    pub research: Handle<AudioSource>,
+    pub error: Handle<AudioSource>,
 }
 
 #[derive(Component)]
@@ -173,6 +177,40 @@ fn click_samples() -> Vec<i16> {
         .collect()
 }
 
+fn research_samples() -> Vec<i16> {
+    let sample_rate = 44100;
+    let duration = 0.25;
+    let count = (sample_rate as f32 * duration) as usize;
+    let tau = std::f32::consts::TAU;
+    (0..count)
+        .map(|i| {
+            let t = i as f32 / sample_rate as f32;
+            let envelope = (1.0 - t / duration).powi(2);
+            // Rising two-tone chime (C6 -> G6)
+            let freq = 1046.5 + t * 500.0;
+            let v = (t * freq * tau).sin() * envelope * 0.5 * i16::MAX as f32;
+            v as i16
+        })
+        .collect()
+}
+
+fn error_samples() -> Vec<i16> {
+    let sample_rate = 44100;
+    let duration = 0.15;
+    let count = (sample_rate as f32 * duration) as usize;
+    let tau = std::f32::consts::TAU;
+    (0..count)
+        .map(|i| {
+            let t = i as f32 / sample_rate as f32;
+            let envelope = (1.0 - t / duration).powi(2);
+            // Low harsh buzz (150 Hz square-ish)
+            let phase = (t * 150.0 * tau).sin();
+            let v = phase.signum() * envelope * 0.35 * i16::MAX as f32;
+            v as i16
+        })
+        .collect()
+}
+
 pub fn ensure_audio_assets() {
     let base = std::env::var("BEVY_ASSET_ROOT")
         .map(PathBuf::from)
@@ -189,11 +227,20 @@ pub fn ensure_audio_assets() {
     let ambient_path = dir.join("ambient.wav");
     let click_path = dir.join("click.wav");
 
+    let research_path = dir.join("research.wav");
+    let error_path = dir.join("error.wav");
+
     if !ambient_path.exists() {
         write_wav(ambient_path.to_str().unwrap(), &ambient_samples(), 44100);
     }
     if !click_path.exists() {
         write_wav(click_path.to_str().unwrap(), &click_samples(), 44100);
+    }
+    if !research_path.exists() {
+        write_wav(research_path.to_str().unwrap(), &research_samples(), 44100);
+    }
+    if !error_path.exists() {
+        write_wav(error_path.to_str().unwrap(), &error_samples(), 44100);
     }
 }
 
@@ -204,10 +251,14 @@ pub fn setup_audio(
 ) {
     let ambient = asset_server.load("audio/ambient.wav");
     let click = asset_server.load("audio/click.wav");
+    let research = asset_server.load("audio/research.wav");
+    let error = asset_server.load("audio/error.wav");
 
     commands.insert_resource(AudioAssets {
         ambient: ambient.clone(),
         click,
+        research,
+        error,
     });
 
     commands.spawn((
@@ -254,9 +305,14 @@ pub fn play_sfx(
     assets: Res<AudioAssets>,
     settings: Res<Settings>,
 ) {
-    for _kind in queue.0.drain(..) {
+    for kind in queue.0.drain(..) {
+        let source = match kind {
+            SfxKind::Place => assets.click.clone(),
+            SfxKind::Research => assets.research.clone(),
+            SfxKind::Error => assets.error.clone(),
+        };
         commands.spawn(AudioBundle {
-            source: assets.click.clone(),
+            source,
             settings: PlaybackSettings {
                 mode: PlaybackMode::Despawn,
                 volume: Volume::new(settings.master_volume * settings.sfx_volume),

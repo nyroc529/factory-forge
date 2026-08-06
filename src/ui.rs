@@ -54,6 +54,10 @@ impl Default for Hotbar {
 #[derive(Resource, Default)]
 pub struct BuildMenu {
     pub visible: bool,
+    /// Current vertical scroll offset in px for the tool cards panel.
+    pub scroll_y: f32,
+    /// Estimated total content height (set when menu opens).
+    pub content_height: f32,
 }
 
 #[derive(Component)]
@@ -235,33 +239,6 @@ impl EditorState {
     }
 }
 
-pub fn tool_color(tool: Tool) -> Color {
-    match tool {
-        Tool::Belt => Color::srgb(0.75, 0.70, 0.35),
-        Tool::Source => Color::srgb(0.16, 0.45, 0.42),
-        Tool::Sink => Color::srgb(0.55, 0.18, 0.18),
-        Tool::Assembler => Color::srgb(0.20, 0.60, 0.30),
-        Tool::Inserter => Color::srgb(0.55, 0.42, 0.12),
-        Tool::Miner => Color::srgb(0.38, 0.18, 0.42),
-        Tool::Storage => Color::srgb(0.22, 0.32, 0.40),
-        Tool::Shipment => Color::srgb(0.20, 0.55, 0.40),
-        Tool::Splitter => Color::srgb(0.55, 0.50, 0.18),
-        Tool::Select => Color::srgb(0.45, 0.45, 0.50),
-        Tool::Paste => Color::srgb(0.30, 0.45, 0.65),
-        Tool::Pole => Color::srgb(0.55, 0.55, 0.60),
-        Tool::Generator => Color::srgb(0.90, 0.80, 0.25),
-        Tool::Pipe => Color::srgb(0.45, 0.45, 0.55),
-        Tool::Pump => Color::srgb(0.25, 0.45, 0.65),
-        Tool::Tank => Color::srgb(0.45, 0.50, 0.55),
-        Tool::Research1 => Color::srgb(0.20, 0.55, 0.45),
-        Tool::Research2 => Color::srgb(0.35, 0.65, 0.50),
-        Tool::Research3 => Color::srgb(0.55, 0.80, 0.60),
-        Tool::RailTrack => Color::srgb(0.25, 0.25, 0.28),
-        Tool::RailStation => Color::srgb(0.45, 0.35, 0.25),
-        Tool::Turret => Color::srgb(0.65, 0.25, 0.25),
-        Tool::ForgeCore => Color::srgb(0.85, 0.35, 0.75),
-    }
-}
 
 pub fn tool_cost(tool: Tool) -> i32 {
     tool_info(tool).cost.credits
@@ -996,11 +973,39 @@ pub fn setup_hotbar(mut commands: Commands) {
     ));
 }
 
+pub fn update_tutorial(
+    player: Res<PlayerState>,
+    stats: Res<ProductionStats>,
+    victory: Res<VictoryState>,
+    mut query: Query<&mut Text, With<TutorialPrompt>>,
+) {
+    if !player.is_changed() && !stats.is_changed() && !victory.is_changed() {
+        return;
+    }
+    if let Ok(mut text) = query.get_single_mut() {
+        let msg = if victory.achieved {
+            "Victory achieved! Sandbox mode unlocked."
+        } else if stats.sold.iter().sum::<u64>() == 0 {
+            "Place a Miner on ore -> Belt it to a Scrap Pit -> Earn credits"
+        } else if player.research_points == 0 {
+            "Earning credits! Complete contracts (Q menu) to earn Research Points"
+        } else if player.tech_flags.count_ones() <= 1 {
+            "You have RP! Open the tech tree (Q) and unlock new buildings"
+        } else {
+            "Keep expanding: more production -> more contracts -> Forge Core to win!"
+        };
+        text.sections[0].value = msg.to_string();
+    }
+}
+
 pub fn update_tool_info(
     hotbar: Res<Hotbar>,
     player: Res<PlayerState>,
     mut query: Query<&mut Text, With<ToolInfoPanel>>,
 ) {
+    if !hotbar.is_changed() && !player.is_changed() {
+        return;
+    }
     if let Ok(mut text) = query.get_single_mut() {
         let value = if let Some(tool) = hotbar.slots[hotbar.selected] {
             let info = tool_info(tool);
@@ -1026,30 +1031,28 @@ pub fn update_tool_info(
 
 pub fn menu_scroll(
     mut scroll_events: EventReader<MouseWheel>,
-    mut content: Query<(&mut Style, &Node), With<MenuScrollContent>>,
-    panels: Query<&Node, With<MenuScrollPanel>>,
-    menu: Res<BuildMenu>,
+    mut content: Query<&mut Style, With<MenuScrollContent>>,
+    mut menu: ResMut<BuildMenu>,
 ) {
     if !menu.visible {
         return;
     }
-    let Ok(panel_node) = panels.get_single() else {
-        return;
-    };
+    let mut delta = 0.0_f32;
     for ev in scroll_events.read() {
-        let delta_y = match ev.unit {
-            MouseScrollUnit::Line => ev.y * 40.0,
+        delta += match ev.unit {
+            MouseScrollUnit::Line => ev.y * 50.0,
             MouseScrollUnit::Pixel => ev.y,
         };
-        for (mut style, node) in content.iter_mut() {
-            let max_offset = (node.size().y - panel_node.size().y).max(0.0);
-            let current = match style.top {
-                Val::Px(v) => -v,
-                _ => 0.0,
-            };
-            let next = (current - delta_y).clamp(0.0, max_offset);
-            style.top = Val::Px(-next);
-        }
+    }
+    if delta == 0.0 {
+        return;
+    }
+    // The max scroll depends on content vs visible panel.
+    // We estimate max from pre-computed content_height vs a generous panel size.
+    let max_offset = (menu.content_height - 400.0).max(0.0);
+    menu.scroll_y = (menu.scroll_y - delta).clamp(0.0, max_offset);
+    for mut style in content.iter_mut() {
+        style.top = Val::Px(-menu.scroll_y);
     }
 }
 
@@ -1058,6 +1061,9 @@ pub fn update_hotbar(
     mut slots: Query<(&HotbarSlot, &mut BackgroundColor, &Children)>,
     mut texts: Query<&mut Text>,
 ) {
+    if !hotbar.is_changed() {
+        return;
+    }
     for (slot, mut bg, children) in slots.iter_mut() {
         let (label, is_filled) = if let Some(tool) = hotbar.slots[slot.0] {
             (tool_info(tool).name, true)
@@ -1289,6 +1295,7 @@ pub fn open_build_menu(
     player: &PlayerState,
     contract: &ContractState,
     victory: &VictoryState,
+    menu: &mut BuildMenu,
 ) {
     let selected_label = hotbar
         .slots[hotbar.selected]
@@ -1329,6 +1336,18 @@ pub fn open_build_menu(
             .collect()
     };
     let groups = collect_by_category(&available_tools);
+
+    // Estimate content height for scroll clamping.
+    // Each category header ~36px, each tool card row ~176px (card 160 + margin).
+    // Assume ~4 cards fit per row on a 90% width panel.
+    let mut est_height = 0.0_f32;
+    for (_, tools) in &groups {
+        est_height += 36.0; // category header
+        let rows = ((tools.len() as f32) / 4.0).ceil();
+        est_height += rows * 176.0;
+    }
+    menu.scroll_y = 0.0;
+    menu.content_height = est_height;
 
     commands
         .spawn((
@@ -1486,7 +1505,7 @@ pub fn handle_menu_input(
         commands.entity(e).despawn_recursive();
     }
     if menu.visible {
-        open_build_menu(commands, &hotbar, &player, &contract, &victory);
+        open_build_menu(commands, &hotbar, &player, &contract, &victory, &mut menu);
     }
 }
 
@@ -1498,16 +1517,20 @@ pub fn handle_menu_clicks(
     mut commands: Commands,
     root: Query<Entity, With<MenuRoot>>,
     player: Res<PlayerState>,
+    mut sfx: ResMut<crate::audio::SfxQueue>,
 ) {
     for (interaction, item) in interactions.iter_mut() {
         if *interaction == Interaction::Pressed {
             if !is_tool_unlocked(item.0, player.tech_flags) {
+                sfx.0.push(crate::audio::SfxKind::Error);
                 continue;
             }
             let info = tool_info(item.0);
             if player.credits < info.cost.credits {
+                sfx.0.push(crate::audio::SfxKind::Error);
                 continue;
             }
+            sfx.0.push(crate::audio::SfxKind::Place);
             let slot = hotbar.selected;
             hotbar.slots[slot] = Some(item.0);
             editor.tool = item.0;
@@ -1536,6 +1559,7 @@ pub fn handle_menu_unlocks(
     mut menu: ResMut<BuildMenu>,
     mut commands: Commands,
     root: Query<Entity, With<MenuRoot>>,
+    mut sfx: ResMut<crate::audio::SfxQueue>,
 ) {
     for (interaction, unlock) in interactions.iter_mut() {
         if *interaction == Interaction::Pressed {
@@ -1543,10 +1567,13 @@ pub fn handle_menu_unlocks(
             if player.research_points >= cost {
                 player.research_points -= cost;
                 unlock_tech(&mut player.tech_flags, unlock.0);
+                sfx.0.push(crate::audio::SfxKind::Research);
                 menu.visible = false;
                 for e in root.iter() {
                     commands.entity(e).despawn_recursive();
                 }
+            } else {
+                sfx.0.push(crate::audio::SfxKind::Error);
             }
         }
     }

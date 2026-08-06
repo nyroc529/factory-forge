@@ -150,6 +150,7 @@ fn main() {
                 audio::play_sfx,
                 audio::update_volumes,
                 render::update_hud,
+                ui::update_tutorial,
                 render::update_victory_overlay,
                 unlock_creative_on_victory,
                 rail::update_train_visuals,
@@ -185,7 +186,7 @@ struct MainMenuOverlay;
 fn setup_main_menu(mut commands: Commands) {
     commands.spawn((
         TextBundle::from_section(
-            "FACTORY FORGE\n\nPress Enter to start\nPress Esc to return here\nPress Q to quit",
+            "FACTORY FORGE\n\nPress Enter to start\nPress O for settings\nPress Esc to return here\nPress Q to quit",
             TextStyle {
                 font_size: 32.0,
                 color: Color::srgb(0.9, 0.92, 0.96),

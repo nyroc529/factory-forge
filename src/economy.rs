@@ -16,12 +16,10 @@ pub struct PlayerState {
 
 impl PlayerState {
     pub fn with_starting_funds() -> Self {
-        let mut flags = 0u64;
-        unlock_tech(&mut flags, Tech::PowerFluids);
         Self {
-            credits: 500,
+            credits: 600,
             research_points: 0,
-            tech_flags: flags,
+            tech_flags: 0,
         }
     }
 }
@@ -141,7 +139,7 @@ const INFO_PASTE: ToolInfo = ToolInfo {
 const INFO_BELT: ToolInfo = ToolInfo {
     name: "Transport Belt",
     description: "Moves items in two lanes.",
-    cost: Cost { credits: 3 },
+    cost: Cost { credits: 2 },
 };
 const INFO_INSERTER: ToolInfo = ToolInfo {
     name: "Inserter",
@@ -161,7 +159,7 @@ const INFO_SOURCE: ToolInfo = ToolInfo {
 const INFO_SINK: ToolInfo = ToolInfo {
     name: "Scrap Pit",
     description: "A hole in the floor that buys any item for credits.",
-    cost: Cost { credits: 40 },
+    cost: Cost { credits: 25 },
 };
 const INFO_ASSEMBLER: ToolInfo = ToolInfo {
     name: "Assembler",
@@ -171,7 +169,7 @@ const INFO_ASSEMBLER: ToolInfo = ToolInfo {
 const INFO_MINER: ToolInfo = ToolInfo {
     name: "Miner",
     description: "Extracts ore from the tile underneath.",
-    cost: Cost { credits: 80 },
+    cost: Cost { credits: 50 },
 };
 const INFO_STORAGE: ToolInfo = ToolInfo {
     name: "Storage",
@@ -408,11 +406,11 @@ impl Tech {
         match self {
             Tech::Splitter => 50,
             Tech::Shipment => 100,
-            Tech::PowerFluids => 150,
+            Tech::PowerFluids => 75,
             Tech::AdvancedResearch => 300,
             Tech::RailLogistics => 500,
             Tech::Combat => 400,
-            Tech::ForgeCore => 1200,
+            Tech::ForgeCore => 800,
             Tech::Creative => 0,
         }
     }
